@@ -1,0 +1,22 @@
+# Event Hubs Kafka Endpoint Configuration
+
+# Connection
+bootstrap.servers=<your-namespace>.servicebus.windows.net:9093
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="$ConnectionString" password="<your-connection-string>";
+
+# Producer Settings
+key.serializer=org.apache.kafka.common.serialization.StringSerializer
+value.serializer=org.apache.kafka.common.serialization.StringSerializer
+acks=all
+retries=3
+max.in.flight.requests.per.connection=5
+enable.idempotence=true
+
+# Consumer Settings
+key.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+value.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+group.id=<your-consumer-group>
+auto.offset.reset=earliest
+enable.auto.commit=true

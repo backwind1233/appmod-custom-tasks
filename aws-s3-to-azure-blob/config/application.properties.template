@@ -1,0 +1,15 @@
+# Azure Blob Storage Configuration
+
+# Storage Account URL (recommended with Managed Identity)
+azure.storage.account.url=https://<your-storage-account>.blob.core.windows.net
+azure.storage.container.name=<your-container-name>
+
+# OR use connection string (for development only)
+# azure.storage.connection.string=DefaultEndpointsProtocol=https;AccountName=<account-name>;AccountKey=<account-key>;EndpointSuffix=core.windows.net
+
+# Optional: Configure retry policy
+azure.storage.retry.max-tries=3
+azure.storage.retry.delay-seconds=2
+
+# Optional: Enable logging
+logging.level.com.azure.storage=DEBUG
