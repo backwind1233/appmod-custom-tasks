@@ -4,43 +4,50 @@ This repository contains custom migration tasks for the GitHub Copilot App Moder
 
 ## Repository Structure
 
-Each task is stored in its own folder with the following structure:
+This repository has a consolidated `metadata.json` file in the root that indexes all available tasks:
 
 ```
+metadata.json            # Central metadata for all tasks (required)
 task-id/
-  ├── task.md              # Main task definition (required)
-  ├── metadata.json        # Task metadata (required)
-  ├── examples/            # Code examples (optional)
+  ├── task.md           # Main task definition (required)
+  ├── examples/         # Code examples (optional)
   │   ├── before.java
   │   └── after.java
-  ├── config/              # Configuration files (optional)
+  ├── config/           # Configuration files (optional)
   │   └── settings.json
-  └── docs/                # Additional documentation (optional)
+  └── docs/             # Additional documentation (optional)
       └── guide.md
 ```
 
-## Task Folder Requirements
+## Repository Requirements
 
-### 1. task.md (Required)
+### 1. metadata.json (Required - Root Level)
+Central metadata file containing all tasks:
+```json
+{
+  "tasks": [
+    {
+      "id": "task-id",
+      "name": "Task Display Name",
+      "description": "Brief description",
+      "author": "Author Name",
+      "version": "1.0.0",
+      "tags": ["migration", "azure"],
+      "category": "storage",
+      "difficulty": "intermediate",
+      "estimatedTime": "2-4 hours",
+      "path": "task-id/task.md"
+    }
+  ]
+}
+```
+
+### 2. task.md (Required - Per Task)
 The main task definition file containing:
 - Task description
 - Migration instructions
 - Step-by-step guide
 - Best practices
-
-### 2. metadata.json (Required)
-Task metadata:
-```json
-{
-  "id": "task-id",
-  "name": "Task Display Name",
-  "description": "Brief description",
-  "author": "Author Name",
-  "version": "1.0.0",
-  "tags": ["migration", "azure"],
-  "category": "storage"
-}
-```
 
 ### 3. Additional Files (Optional)
 - Examples: Before/after code samples
@@ -57,6 +64,7 @@ Task metadata:
 
 To add a new task:
 1. Create a new folder with a descriptive ID
-2. Add task.md and metadata.json
-3. Include helpful examples and documentation
-4. Test locally before publishing
+2. Add task.md with the migration instructions
+3. Update the root metadata.json to include your task
+4. Include helpful examples and documentation
+5. Test locally before publishing
