@@ -1,0 +1,52 @@
+{
+  "tasks": [
+    {
+      "id": "aws-s3-to-azure-blob",
+      "name": "Migrate AWS S3 to Azure Blob Storage",
+      "description": "Migrate your application from AWS S3 to Azure Blob Storage with code transformation and configuration updates",
+      "author": "Microsoft",
+      "version": "1.0.0",
+      "tags": ["aws", "azure", "storage", "s3", "blob"],
+      "category": "storage",
+      "difficulty": "intermediate",
+      "estimatedTime": "2-4 hours",
+      "path": "aws-s3-to-azure-blob"
+    },
+    {
+      "id": "kafka-to-eventhubs",
+      "name": "Migrate Kafka to Azure Event Hubs",
+      "description": "Migrate Apache Kafka applications to Azure Event Hubs with minimal code changes",
+      "author": "Microsoft",
+      "version": "1.0.0",
+      "tags": ["kafka", "azure", "eventhubs", "messaging"],
+      "category": "messaging",
+      "difficulty": "intermediate",
+      "estimatedTime": "3-5 hours",
+      "path": "kafka-to-eventhubs"
+    },
+    {
+      "id": "log4j-to-azure-monitor",
+      "name": "Integrate Azure Monitor Application Insights",
+      "description": "Add Azure Monitor Application Insights telemetry to your Java application",
+      "author": "Microsoft",
+      "version": "1.0.0",
+      "tags": ["monitoring", "azure", "application-insights", "observability"],
+      "category": "monitoring",
+      "difficulty": "beginner",
+      "estimatedTime": "1-2 hours",
+      "path": "log4j-to-azure-monitor"
+    },
+    {
+      "id": "rabbitmq-to-servicebus",
+      "name": "Migrate RabbitMQ to Azure Service Bus",
+      "description": "Transform RabbitMQ messaging patterns to Azure Service Bus",
+      "author": "Community",
+      "version": "1.0.0",
+      "tags": ["rabbitmq", "azure", "servicebus", "messaging"],
+      "category": "messaging",
+      "difficulty": "advanced",
+      "estimatedTime": "4-6 hours",
+      "path": "rabbitmq-to-servicebus"
+    }
+  ]
+}
