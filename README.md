@@ -10,14 +10,12 @@ This repository has a consolidated `metadata.json` file in the root that indexes
 metadata.json            # Central metadata for all tasks (required)
 task-id/
   ├── task.md           # Main task definition (required)
-  ├── examples/         # Code examples (optional)
-  │   ├── before.java
-  │   └── after.java
-  ├── config/           # Configuration files (optional)
-  │   └── settings.json
-  └── docs/             # Additional documentation (optional)
-      └── guide.md
+  ├── example.java      # Code examples (optional)
+  ├── config.json       # Configuration files (optional)
+  └── changes.diff      # Git diff files (optional)
 ```
+
+**Note:** Task folders use a flat structure - all files are placed directly in the task folder, not in subdirectories.
 
 ## Repository Requirements
 
@@ -43,16 +41,29 @@ Central metadata file containing all tasks:
 ```
 
 ### 2. task.md (Required - Per Task)
-The main task definition file containing:
-- Task description
-- Migration instructions
-- Step-by-step guide
-- Best practices
+The main task definition file with YAML front matter and markdown content:
+```markdown
+---
+id: task-id
+name: Task Name
+type: task
+---
+
+**Prompt:**
+
+Your task instructions here
+
+**References:**
+- file:///example.java
+- git+file:///changes.diff
+```
 
 ### 3. Additional Files (Optional)
-- Examples: Before/after code samples
-- Configs: Sample configuration files
-- Docs: Additional documentation
+All additional files should be placed directly in the task folder:
+- Code examples (e.g., `example.java`, `sample.py`)
+- Configuration files (e.g., `config.json`, `settings.properties`)
+- Git diff files (e.g., `changes.diff`)
+- Any other reference materials
 
 ## Using This Repository
 
