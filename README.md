@@ -7,7 +7,11 @@ This repository contains custom migration tasks for the GitHub Copilot App Moder
 This repository has a consolidated `metadata.json` file in the root that indexes all available tasks:
 
 ```
-metadata.json            # Central metadata for all tasks (required)
+metadata.json            # Central metadata for all tasks (auto-generated)
+scripts/
+  ├── generate-metadata.js  # Script to generate metadata.json
+  ├── package.json          # Node.js dependencies
+  └── node_modules/         # Installed dependencies
 task-id/
   ├── task.md           # Main task definition (required)
   ├── example.java      # Code examples (optional)
@@ -17,24 +21,29 @@ task-id/
 
 **Note:** Task folders use a flat structure - all files are placed directly in the task folder, not in subdirectories.
 
+## Generating Metadata
+
+The `metadata.json` file is auto-generated from the task.md files:
+
+```bash
+cd scripts
+npm install  # First time only
+npm start    # Generates metadata.json
+```
+
+The script scans all task folders and extracts information from the YAML frontmatter in each `task.md` file.
+
 ## Repository Requirements
 
-### 1. metadata.json (Required - Root Level)
-Central metadata file containing all tasks:
+### 1. metadata.json (Auto-Generated - Root Level)
+Central metadata file containing all tasks. Generated automatically by running `npm start` in the scripts folder:
 ```json
 {
   "tasks": [
     {
       "id": "task-id",
       "name": "Task Display Name",
-      "description": "Brief description",
-      "author": "Author Name",
-      "version": "1.0.0",
-      "tags": ["migration", "azure"],
-      "category": "storage",
-      "difficulty": "intermediate",
-      "estimatedTime": "2-4 hours",
-      "path": "task-id/task.md"
+      "path": "task-id"
     }
   ]
 }
@@ -69,10 +78,19 @@ All additional files should be placed directly in the task folder:
 
 1. **Local Testing**: Place this folder in your workspace
 2. **Remote Hosting**: Push to a public Git repository
-3. **Configuration**: Add the repository URL to the extension settings
-
-## Contributing
-
+3. **Configuration**: Add the repository URL (e.g., `my-new-task`)
+2. Add `task.md` with YAML frontmatter:
+   ```markdown
+   ---
+   id: my-new-task
+   name: My New Task Name
+   type: task
+   ---
+   
+   # Your task content here
+   ```
+3. Include helpful examples and documentation in the task folder
+4. Run `cd scripts && npm start` to regenerate `metadata.json`
 To add a new task:
 1. Create a new folder with a descriptive ID
 2. Add task.md with the migration instructions
