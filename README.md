@@ -43,7 +43,7 @@ Central metadata file containing all tasks. Generated automatically by running `
     {
       "id": "task-id",
       "name": "Task Display Name",
-      "path": "task-id"
+      "path": "task path"
     }
   ]
 }
