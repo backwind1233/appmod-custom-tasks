@@ -107,15 +107,6 @@ You can include any supporting files in your task folder:
 
 All files should be placed directly in the task folder (no subdirectories).
 
-## Available Tasks
-
-| Task ID | Description |
-|---------|-------------|
-| `aws-s3-to-azure-blob` | Migrate AWS S3 to Azure Blob Storage |
-| `kafka-to-eventhubs` | Migrate Kafka to Azure Event Hubs |
-| `log4j-to-azure-monitor-03` | Integrate Azure Monitor Application Insights |
-| `rabbitmq-to-servicebus` | Migrate RabbitMQ to Azure Service Bus |
-
 ## Development
 
 ### Prerequisites
@@ -159,27 +150,7 @@ npm run security-scan
 
 ## Private Repository Setup
 
-For teams that want to maintain their own private task repository:
-
-### Option 1: Fork and Make Private
-
-1. Fork this repository
-2. Make the fork private in repository settings
-3. Add your custom tasks
-4. Configure the extension to use your private repository URL
-
-### Option 2: Use the Template Branch
-
-1. Create a new private repository
-2. Copy the template structure from the `template` branch:
-   ```bash
-   git clone --branch template https://github.com/backwind1233/appmod-custom-tasks.git my-private-tasks
-   cd my-private-tasks
-   git remote remove origin
-   git remote add origin <your-private-repo-url>
-   git push -u origin main
-   ```
-3. See [templates/TEMPLATE-README.md](templates/TEMPLATE-README.md) for detailed setup instructions
+For teams that want to maintain their own private task repository, see [PRIVATE-REPO-SETUP.md](PRIVATE-REPO-SETUP.md) for detailed instructions.
 
 ## Pull Request Process
 
@@ -223,6 +194,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- 📖 [Documentation](https://github.com/backwind1233/appmod-custom-tasks/wiki)
-- 🐛 [Issue Tracker](https://github.com/backwind1233/appmod-custom-tasks/issues)
-- 💬 [Discussions](https://github.com/backwind1233/appmod-custom-tasks/discussions)
+- � [Issue Tracker](../../issues)
+- 💬 [Discussions](../../discussions)
