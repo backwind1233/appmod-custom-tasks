@@ -1,5 +1,5 @@
 {
-  "name": "custom-tasks-repo",
+  "name": "appmod-custom-tasks",
   "version": "1.0.0",
   "description": "Custom migration tasks repository",
   "scripts": {

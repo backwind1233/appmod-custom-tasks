@@ -1,4 +1,4 @@
-# Custom Tasks Repository
+# appmod-custom-tasks
 
 This repository contains custom migration tasks for the GitHub Copilot App Modernization extension.
 
