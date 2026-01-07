@@ -1,46 +1,45 @@
+#!/usr/bin/env node
+/**
+ * Task Validation Script
+ * 
+ * Validates that task folders follow the required format specification:
+ * - Valid YAML frontmatter with required fields
+ * - **Prompt:** section present
+ * - No forbidden patterns
+ * - Proper folder naming conventions
+ * 
+ * Usage: 
+ *   npm run validate              # Validate all tasks
+ *   npm run validate [folder...]  # Validate specific folders
+ */
+
 const fs = require('fs');
 const path = require('path');
 const matter = require('gray-matter');
 
+const { 
+  TASKS_DIR, 
+  REQUIRED_FRONTMATTER_FIELDS, 
+  VALID_TASK_TYPES,
+  FORBIDDEN_PATTERNS,
+  SECURITY_PATTERNS,
+} = require('./lib/constants');
+
+const {
+  getRootDir,
+  getTasksDir,
+  getTaskMdPath,
+  getTaskFolders,
+  isValidFolderName,
+} = require('./lib/task-utils');
+
 /**
- * Task Validation Script
- * Validates that task folders follow the required format specification
+ * Task Validator Class
  */
-
-const REQUIRED_FRONTMATTER_FIELDS = ['id', 'name', 'type'];
-const VALID_TASK_TYPES = ['task'];
-const TASKS_DIR = 'tasks';
-const FORBIDDEN_PATTERNS = [
-  // Potentially dangerous patterns in task content
-  /\beval\s*\(/gi,
-  /\bexec\s*\(/gi,
-  /\bprocess\.env/gi,
-  /\brequire\s*\(['"]\s*child_process/gi,
-  /\bspawn\s*\(/gi,
-  /\bshell\s*:/gi,
-  /rm\s+-rf\s+\//gi,
-  /\bsudo\b/gi,
-  /\bcurl\s+.*\|\s*sh/gi,
-  /\bwget\s+.*\|\s*sh/gi,
-];
-
-const SECURITY_PATTERNS = [
-  // Prompt injection patterns
-  { pattern: /ignore\s+(all\s+)?(previous|above)\s+(instructions?|prompts?)/gi, description: 'Prompt injection attempt' },
-  { pattern: /disregard\s+(all\s+)?(previous|above)/gi, description: 'Prompt injection attempt' },
-  { pattern: /forget\s+(all\s+)?(previous|above)/gi, description: 'Prompt injection attempt' },
-  { pattern: /you\s+are\s+now\s+(a|an)/gi, description: 'Role hijacking attempt' },
-  { pattern: /act\s+as\s+(if|a|an)/gi, description: 'Potential role manipulation' },
-  { pattern: /pretend\s+(you|to\s+be)/gi, description: 'Potential role manipulation' },
-  // Dangerous commands
-  { pattern: /\bformat\s+[a-z]:/gi, description: 'Potentially dangerous disk command' },
-  { pattern: /\bdel\s+\/[fqs]/gi, description: 'Potentially dangerous delete command' },
-  { pattern: /\brmdir\s+\/s/gi, description: 'Potentially dangerous directory removal' },
-];
-
 class TaskValidator {
   constructor(rootDir) {
     this.rootDir = rootDir;
+    this.tasksDir = getTasksDir(rootDir);
     this.errors = [];
     this.warnings = [];
   }
@@ -49,15 +48,14 @@ class TaskValidator {
    * Validate a single task folder
    */
   validateTask(taskFolderName) {
-    const taskPath = path.join(this.rootDir, TASKS_DIR, taskFolderName);
-    const taskMdPath = path.join(taskPath, 'task.md');
+    const taskMdPath = getTaskMdPath(this.rootDir, taskFolderName);
 
     // Check if task.md exists
     if (!fs.existsSync(taskMdPath)) {
       this.errors.push({
         task: taskFolderName,
         type: 'missing_file',
-        message: `Missing required file: task.md`
+        message: 'Missing required file: task.md',
       });
       return false;
     }
@@ -70,7 +68,7 @@ class TaskValidator {
       this.errors.push({
         task: taskFolderName,
         type: 'read_error',
-        message: `Error reading task.md: ${error.message}`
+        message: `Error reading task.md: ${error.message}`,
       });
       return false;
     }
@@ -91,37 +89,38 @@ class TaskValidator {
       this.errors.push({
         task: taskFolderName,
         type: 'frontmatter_error',
-        message: `Invalid YAML frontmatter: ${error.message}`
+        message: `Invalid YAML frontmatter: ${error.message}`,
       });
       return false;
     }
 
-    // Check required fields
+    // Check required frontmatter fields
     for (const field of REQUIRED_FRONTMATTER_FIELDS) {
       if (!data[field]) {
         this.errors.push({
           task: taskFolderName,
           type: 'missing_field',
-          message: `Missing required frontmatter field: ${field}`
+          message: `Missing required frontmatter field: ${field}`,
         });
         isValid = false;
       }
     }
 
-    // Validate field values
+    // Validate id matches folder name
     if (data.id && data.id !== taskFolderName) {
       this.warnings.push({
         task: taskFolderName,
         type: 'id_mismatch',
-        message: `Task id "${data.id}" does not match folder name "${taskFolderName}"`
+        message: `Task id "${data.id}" does not match folder name "${taskFolderName}"`,
       });
     }
 
+    // Validate task type
     if (data.type && !VALID_TASK_TYPES.includes(data.type)) {
       this.errors.push({
         task: taskFolderName,
         type: 'invalid_type',
-        message: `Invalid task type: ${data.type}. Valid types: ${VALID_TASK_TYPES.join(', ')}`
+        message: `Invalid task type: ${data.type}. Valid types: ${VALID_TASK_TYPES.join(', ')}`,
       });
       isValid = false;
     }
@@ -131,39 +130,41 @@ class TaskValidator {
       this.errors.push({
         task: taskFolderName,
         type: 'missing_prompt',
-        message: 'Missing required **Prompt:** section'
+        message: 'Missing required **Prompt:** section',
       });
       isValid = false;
     }
 
-    // Check for required **References:** section
+    // Check for **References:** section (warning only)
     if (!content.includes('**References:**')) {
       this.warnings.push({
         task: taskFolderName,
         type: 'missing_references',
-        message: 'Missing **References:** section (recommended)'
+        message: 'Missing **References:** section (recommended)',
       });
     }
 
     // Check for forbidden patterns
     for (const pattern of FORBIDDEN_PATTERNS) {
+      pattern.lastIndex = 0; // Reset regex
       if (pattern.test(content)) {
         this.errors.push({
           task: taskFolderName,
           type: 'forbidden_pattern',
-          message: `Content contains forbidden pattern: ${pattern.toString()}`
+          message: `Content contains forbidden pattern: ${pattern.toString()}`,
         });
         isValid = false;
       }
     }
 
-    // Check for security patterns
+    // Check for security patterns (warnings)
     for (const { pattern, description } of SECURITY_PATTERNS) {
+      pattern.lastIndex = 0; // Reset regex
       if (pattern.test(content)) {
         this.warnings.push({
           task: taskFolderName,
           type: 'security_warning',
-          message: `${description}: ${pattern.toString()}`
+          message: `${description}: ${pattern.toString()}`,
         });
       }
     }
@@ -175,13 +176,11 @@ class TaskValidator {
    * Validate folder name format
    */
   validateFolderName(folderName) {
-    // Folder names should be lowercase with hyphens
-    const validPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-    if (!validPattern.test(folderName)) {
+    if (!isValidFolderName(folderName)) {
       this.warnings.push({
         task: folderName,
         type: 'naming_convention',
-        message: `Folder name should be lowercase with hyphens (e.g., "my-task-name")`
+        message: 'Folder name should be lowercase with hyphens (e.g., "my-task-name")',
       });
     }
   }
@@ -190,29 +189,23 @@ class TaskValidator {
    * Validate all tasks in the repository
    */
   validateAll() {
-    const tasksDir = path.join(this.rootDir, TASKS_DIR);
-    
-    if (!fs.existsSync(tasksDir)) {
+    if (!fs.existsSync(this.tasksDir)) {
       console.log('No tasks directory found.');
       return { valid: 0, invalid: 0, errors: [], warnings: [] };
     }
 
-    const entries = fs.readdirSync(tasksDir, { withFileTypes: true });
-
+    const taskFolders = getTaskFolders(this.rootDir);
     let validTasks = 0;
     let invalidTasks = 0;
 
-    for (const entry of entries) {
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        // Check if this looks like a task folder (has task.md)
-        const taskMdPath = path.join(tasksDir, entry.name, 'task.md');
-        if (fs.existsSync(taskMdPath)) {
-          this.validateFolderName(entry.name);
-          if (this.validateTask(entry.name)) {
-            validTasks++;
-          } else {
-            invalidTasks++;
-          }
+    for (const entry of taskFolders) {
+      const taskMdPath = getTaskMdPath(this.rootDir, entry.name);
+      if (fs.existsSync(taskMdPath)) {
+        this.validateFolderName(entry.name);
+        if (this.validateTask(entry.name)) {
+          validTasks++;
+        } else {
+          invalidTasks++;
         }
       }
     }
@@ -221,12 +214,12 @@ class TaskValidator {
       valid: validTasks,
       invalid: invalidTasks,
       errors: this.errors,
-      warnings: this.warnings
+      warnings: this.warnings,
     };
   }
 
   /**
-   * Validate only changed tasks (for PR validation)
+   * Validate only specific tasks (for PR validation)
    */
   validateChangedTasks(changedFolders) {
     let validTasks = 0;
@@ -245,23 +238,23 @@ class TaskValidator {
       valid: validTasks,
       invalid: invalidTasks,
       errors: this.errors,
-      warnings: this.warnings
+      warnings: this.warnings,
     };
   }
 
   /**
-   * Generate report
+   * Generate markdown report
    */
   generateReport(results) {
     let report = '# Task Validation Report\n\n';
 
-    report += `## Summary\n`;
+    report += '## Summary\n';
     report += `- ✅ Valid tasks: ${results.valid}\n`;
     report += `- ❌ Invalid tasks: ${results.invalid}\n`;
-    report += `- ⚠️ Warnings: ${results.warnings.length}\n\n`;
+    report += `- ⚠️ Warnings: ${results.warnings.length}\n`;
 
     if (results.errors.length > 0) {
-      report += `## Errors\n\n`;
+      report += '\n## Errors\n\n';
       for (const error of results.errors) {
         report += `### ${error.task}\n`;
         report += `- **Type:** ${error.type}\n`;
@@ -270,7 +263,7 @@ class TaskValidator {
     }
 
     if (results.warnings.length > 0) {
-      report += `## Warnings\n\n`;
+      report += '\n## Warnings\n\n';
       for (const warning of results.warnings) {
         report += `### ${warning.task}\n`;
         report += `- **Type:** ${warning.type}\n`;

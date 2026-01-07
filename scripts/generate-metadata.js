@@ -1,68 +1,113 @@
+#!/usr/bin/env node
+/**
+ * Generate Metadata Script
+ * 
+ * This script:
+ * 1. Syncs file references in task.md files with actual files in folders
+ * 2. Generates metadata.json from all valid tasks
+ * 
+ * Usage: npm start
+ */
+
 const fs = require('fs');
 const path = require('path');
 const matter = require('gray-matter');
 
-// Tasks are stored in the tasks/ directory
-const TASKS_DIR = 'tasks';
+const { TASKS_DIR } = require('./lib/constants');
+const { 
+  getRootDir, 
+  getTasksDir, 
+  getTaskFolders, 
+  getTaskMdPath, 
+  hasTaskMd 
+} = require('./lib/task-utils');
+const { 
+  updateTaskReferences, 
+  logReferenceUpdate 
+} = require('./lib/references');
 
+/**
+ * Process a single task folder
+ */
+function processTask(rootDir, taskFolderName) {
+  const taskPath = path.join(getTasksDir(rootDir), taskFolderName);
+  const taskMdPath = getTaskMdPath(rootDir, taskFolderName);
+
+  // Update file references
+  const refResult = updateTaskReferences(taskPath, taskFolderName);
+  logReferenceUpdate(taskFolderName, refResult);
+
+  // Read updated content and extract metadata
+  const fileContent = fs.readFileSync(taskMdPath, 'utf8');
+  const { data } = matter(fileContent);
+
+  if (data.id && data.name) {
+    return {
+      id: data.id,
+      name: data.name,
+      path: `${TASKS_DIR}/${taskFolderName}`,
+    };
+  } else {
+    console.warn(`⚠️  Warning: ${taskFolderName}/task.md is missing required frontmatter (id, name)`);
+    return null;
+  }
+}
+
+/**
+ * Main function to generate metadata
+ */
 function generateMetadata() {
-  const tasks = [];
-  const rootDir = path.join(__dirname, '..');
-  const tasksDir = path.join(rootDir, TASKS_DIR);
+  const rootDir = getRootDir(__dirname);
+  const tasksDir = getTasksDir(rootDir);
 
-  // Ensure tasks directory exists
+  // Check if tasks directory exists
   if (!fs.existsSync(tasksDir)) {
     console.log('No tasks directory found. Creating empty metadata.json');
-    fs.writeFileSync(path.join(rootDir, 'metadata.json'), JSON.stringify({ tasks: [] }, null, 2), 'utf8');
+    fs.writeFileSync(
+      path.join(rootDir, 'metadata.json'), 
+      JSON.stringify({ tasks: [] }, null, 2), 
+      'utf8'
+    );
     return;
   }
 
-  // Read all directories in the tasks folder
-  const entries = fs.readdirSync(tasksDir, { withFileTypes: true });
+  console.log('Processing tasks...\n');
 
-  for (const entry of entries) {
-    if (entry.isDirectory() && !entry.name.startsWith('.')) {
-      const taskMdPath = path.join(tasksDir, entry.name, 'task.md');
+  // Process all task folders
+  const tasks = [];
+  const taskFolders = getTaskFolders(rootDir);
 
-      // Check if task.md exists
-      if (fs.existsSync(taskMdPath)) {
-        try {
-          const fileContent = fs.readFileSync(taskMdPath, 'utf8');
-          const { data } = matter(fileContent);
+  for (const entry of taskFolders) {
+    if (!hasTaskMd(rootDir, entry.name)) continue;
 
-          // Extract only properties available from the YAML frontmatter
-          if (data.id && data.name) {
-            tasks.push({
-              id: data.id,
-              name: data.name,
-              path: `${TASKS_DIR}/${entry.name}`
-            });
-          } else {
-            console.warn(`Warning: ${entry.name}/task.md is missing required frontmatter (id, name)`);
-          }
-        } catch (error) {
-          console.error(`Error processing ${taskMdPath}:`, error.message);
-        }
+    try {
+      const task = processTask(rootDir, entry.name);
+      if (task) {
+        tasks.push(task);
       }
+    } catch (error) {
+      console.error(`❌ Error processing ${entry.name}:`, error.message);
     }
   }
 
-  // Sort tasks by id for consistent output
+  // Sort tasks by id
   tasks.sort((a, b) => a.id.localeCompare(b.id));
 
   // Write metadata.json
-  const metadata = {
-    tasks: tasks
-  };
-
+  const metadata = { tasks };
   fs.writeFileSync(
     path.join(rootDir, 'metadata.json'),
     JSON.stringify(metadata, null, 2),
     'utf8'
   );
 
-  console.log(`Generated metadata.json with ${tasks.length} tasks`);
-  tasks.forEach(task => console.log(`  - ${task.id}: ${task.name}`));
+  console.log(`\n✅ Generated metadata.json with ${tasks.length} tasks`);
+  tasks.forEach(task => console.log(`   - ${task.id}: ${task.name}`));
 }
 
-generateMetadata();
+// Run if called directly
+if (require.main === module) {
+  generateMetadata();
+}
+
+module.exports = { generateMetadata };

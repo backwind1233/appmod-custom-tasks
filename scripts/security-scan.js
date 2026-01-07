@@ -1,181 +1,32 @@
-const fs = require('fs');
-const path = require('path');
-const matter = require('gray-matter');
-
+#!/usr/bin/env node
 /**
  * Security Scanner for Task Files
- * Scans task content for potential security issues, prompt injections, and malicious content
+ * 
+ * Scans task content for potential security issues:
+ * - Prompt injection attempts
+ * - Malicious commands
+ * - Data exfiltration patterns
+ * - Hardcoded credentials
+ * 
+ * Usage:
+ *   npm run security-scan           # Scan all tasks
+ *   npm run security-scan [folder]  # Scan specific folders
+ *   npm run security-scan --json    # Output JSON format
  */
 
-// Security rule definitions
-const SECURITY_RULES = {
-  critical: [
-    {
-      id: 'PROMPT_INJECTION_001',
-      name: 'Instruction Override Attempt',
-      patterns: [
-        /ignore\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?|rules?|guidelines?)/gi,
-        /disregard\s+(all\s+)?(previous|above|prior)/gi,
-        /forget\s+(all\s+)?(previous|above|prior|everything)/gi,
-        /override\s+(all\s+)?(previous|above|prior|system)/gi,
-      ],
-      description: 'Detected attempt to override AI instructions',
-    },
-    {
-      id: 'PROMPT_INJECTION_002',
-      name: 'System Prompt Extraction',
-      patterns: [
-        /what\s+(is|are)\s+(your|the)\s+(system\s+)?prompt/gi,
-        /show\s+(me\s+)?(your|the)\s+(system\s+)?prompt/gi,
-        /reveal\s+(your|the)\s+(system\s+)?prompt/gi,
-        /print\s+(your|the)\s+(system\s+)?prompt/gi,
-      ],
-      description: 'Detected attempt to extract system prompts',
-    },
-    {
-      id: 'MALICIOUS_CMD_001',
-      name: 'Dangerous System Command',
-      patterns: [
-        /rm\s+-rf\s+\/(?!tmp)/gi,
-        /rmdir\s+\/s\s+\/q\s+[a-z]:\\/gi,
-        /format\s+[a-z]:\s*\/[qy]/gi,
-        /del\s+\/[fqs]\s+[a-z]:\\/gi,
-        /mkfs\s+/gi,
-        /dd\s+if=.*of=\/dev\//gi,
-      ],
-      description: 'Detected potentially destructive system command',
-    },
-    {
-      id: 'DATA_EXFIL_001',
-      name: 'Data Exfiltration Pattern',
-      patterns: [
-        /curl\s+.*-d\s+.*\$\(/gi,
-        /wget\s+.*--post-data/gi,
-        /curl\s+.*@.*\/etc\/passwd/gi,
-        /curl\s+.*@.*\.ssh\/id_rsa/gi,
-      ],
-      description: 'Detected potential data exfiltration attempt',
-    },
-    {
-      id: 'SHELL_INJECT_001',
-      name: 'Remote Code Execution',
-      patterns: [
-        /curl\s+.*\|\s*sh/gi,
-        /wget\s+.*\|\s*sh/gi,
-        /curl\s+.*\|\s*bash/gi,
-        /wget\s+.*\|\s*bash/gi,
-        /\$\(curl\s+/gi,
-        /\$\(wget\s+/gi,
-      ],
-      description: 'Detected remote code execution pattern',
-    },
-  ],
-  high: [
-    {
-      id: 'ROLE_HIJACK_001',
-      name: 'Role Hijacking Attempt',
-      patterns: [
-        /you\s+are\s+now\s+(a|an|the)/gi,
-        /from\s+now\s+on,?\s+you\s+(are|will\s+be)/gi,
-        /pretend\s+(you\s+are|to\s+be)/gi,
-        /act\s+as\s+(if\s+you|a|an|the)/gi,
-        /roleplay\s+as/gi,
-      ],
-      description: 'Detected attempt to change AI role',
-    },
-    {
-      id: 'JAILBREAK_001',
-      name: 'Jailbreak Attempt',
-      patterns: [
-        /\bDAN\b/g,
-        /do\s+anything\s+now/gi,
-        /jailbreak/gi,
-        /\bunlocked\s+mode\b/gi,
-        /developer\s+mode\s+(enabled|activated|on)/gi,
-      ],
-      description: 'Detected potential jailbreak attempt',
-    },
-    {
-      id: 'CREDENTIAL_001',
-      name: 'Hardcoded Credentials',
-      patterns: [
-        // Match actual credentials, but exclude obvious placeholders
-        /password\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
-        /api[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
-        /secret[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
-        /access[_-]?token\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
-        /private[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
-      ],
-      description: 'Detected potential hardcoded credentials',
-      // Skip matches that look like placeholders
-      skipPatterns: [
-        /<your-/i,
-        /\${/,
-        /your-.*-here/i,
-        /example/i,
-        /placeholder/i,
-        /xxx/i,
-        /\*\*\*/,
-      ],
-    },
-  ],
-  medium: [
-    {
-      id: 'ENCODING_001',
-      name: 'Encoded Content',
-      patterns: [
-        /base64[_-]?decode/gi,
-        /atob\s*\(/gi,
-        /btoa\s*\(/gi,
-        /Buffer\.from\s*\([^)]+,\s*['"]base64['"]\)/gi,
-      ],
-      description: 'Detected base64 encoding/decoding which could hide malicious content',
-    },
-    {
-      id: 'EVAL_001',
-      name: 'Dynamic Code Execution',
-      patterns: [
-        /\beval\s*\(/gi,
-        /\bexec\s*\(/gi,
-        /Function\s*\(\s*["']/gi,
-        /new\s+Function\s*\(/gi,
-        /setTimeout\s*\(\s*["']/gi,
-        /setInterval\s*\(\s*["']/gi,
-      ],
-      description: 'Detected dynamic code execution pattern',
-    },
-  ],
-  low: [
-    {
-      id: 'OVERRIDE_001',
-      name: 'Configuration Override',
-      patterns: [
-        /--no-verify/gi,
-        /--skip-validation/gi,
-        /-f\s+--force/gi,
-        /--allow-root/gi,
-      ],
-      description: 'Detected security bypass flags',
-    },
-    {
-      id: 'SUDO_001',
-      name: 'Elevated Privilege Request',
-      patterns: [
-        /\bsudo\s+/gi,
-        /\bsu\s+-\s+/gi,
-        /Run\s+as\s+administrator/gi,
-      ],
-      description: 'Detected request for elevated privileges',
-    },
-  ],
-};
+const fs = require('fs');
+const path = require('path');
 
-const TASKS_DIR = 'tasks';
+const { TASKS_DIR, SECURITY_RULES } = require('./lib/constants');
+const { getRootDir, getTasksDir, getTaskFolders, getTaskMdPath } = require('./lib/task-utils');
 
+/**
+ * Security Scanner Class
+ */
 class SecurityScanner {
   constructor(rootDir) {
     this.rootDir = rootDir;
-    this.tasksDir = path.join(rootDir, TASKS_DIR);
+    this.tasksDir = getTasksDir(rootDir);
     this.findings = [];
   }
 
@@ -257,14 +108,12 @@ class SecurityScanner {
       return this.summarizeFindings();
     }
 
-    const entries = fs.readdirSync(this.tasksDir, { withFileTypes: true });
+    const taskFolders = getTaskFolders(this.rootDir);
 
-    for (const entry of entries) {
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        const taskMdPath = path.join(this.tasksDir, entry.name, 'task.md');
-        if (fs.existsSync(taskMdPath)) {
-          this.findings.push(...this.scanTask(entry.name));
-        }
+    for (const entry of taskFolders) {
+      const taskMdPath = getTaskMdPath(this.rootDir, entry.name);
+      if (fs.existsSync(taskMdPath)) {
+        this.findings.push(...this.scanTask(entry.name));
       }
     }
 
@@ -302,15 +151,15 @@ class SecurityScanner {
   }
 
   /**
-   * Generate security report
+   * Generate markdown report
    */
   generateReport(summary) {
     let report = '# Security Scan Report\n\n';
 
-    // Summary section
+    // Summary table
     report += '## Summary\n\n';
-    report += `| Severity | Count |\n`;
-    report += `|----------|-------|\n`;
+    report += '| Severity | Count |\n';
+    report += '|----------|-------|\n';
     report += `| 🔴 Critical | ${summary.critical.length} |\n`;
     report += `| 🟠 High | ${summary.high.length} |\n`;
     report += `| 🟡 Medium | ${summary.medium.length} |\n`;
