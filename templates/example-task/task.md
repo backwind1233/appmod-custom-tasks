@@ -4,13 +4,9 @@ name: Example Migration Task
 type: task
 ---
 
-# Example Migration Task
+**Prompt:**
 
-This is a template task that demonstrates the expected format for migration tasks.
-
-## Overview
-
-Briefly describe what this task accomplishes and the technologies involved.
+Briefly describe what this task accomplishes and the technologies involved. This is a template task that demonstrates the expected format for migration tasks.
 
 ## Prerequisites
 
@@ -119,8 +115,7 @@ new.connection.timeout=30000
 export NEW_CONNECTION_STRING="your-connection-string"
 ```
 
-## Additional Resources
-
-- [New API Documentation](https://example.com/docs)
-- [Migration Guide](https://example.com/migration)
-- [Troubleshooting](https://example.com/troubleshooting)
+**References:**
+- https://example.com/docs
+- https://example.com/migration
+- https://example.com/troubleshooting

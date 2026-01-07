@@ -74,7 +74,7 @@ mkdir tasks/my-source-to-my-target
 
 ### Step 3: Create task.md
 
-Create the main task file with required YAML frontmatter:
+Create the main task file with required YAML frontmatter and standard format:
 
 ```markdown
 ---
@@ -83,10 +83,9 @@ name: Migrate My Source to My Target
 type: task
 ---
 
-# Migrate My Source to My Target
+**Prompt:**
 
-## Overview
-Brief description of what this task accomplishes.
+Brief description of what this task accomplishes. This is the main prompt that will guide the migration.
 
 ## Prerequisites
 - Required software/versions
@@ -103,12 +102,14 @@ Explain configuration changes...
 ### 3. Transform Code
 Explain code transformations...
 
-## Testing
-How to verify the migration was successful...
-
-## Common Issues
-Known issues and their solutions...
+**References:**
+- https://docs.example.com/migration-guide
+- https://docs.example.com/api-reference
 ```
+
+**Required Sections:**
+- `**Prompt:**` - The main task description (required)
+- `**References:**` - List of reference URLs (recommended)
 
 ### Step 4: Add Supporting Files (Optional)
 

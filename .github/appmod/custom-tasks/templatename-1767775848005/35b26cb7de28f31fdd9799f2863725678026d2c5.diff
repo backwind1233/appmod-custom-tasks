@@ -1,0 +1,2517 @@
+commit 35b26cb7de28f31fdd9799f2863725678026d2c5
+Author: zhihaoguo <zhihaoguo@microsoft.com>
+Date:   Wed Jan 7 16:41:24 2026 +0800
+
+    feat: Add task validation script and multiple migration tasks
+
+diff --git a/.github/workflows/pr-validation.yml b/.github/workflows/pr-validation.yml
+new file mode 100644
+index 0000000..3031f7e
+--- /dev/null
++++ b/.github/workflows/pr-validation.yml
+@@ -0,0 +1,176 @@
++name: PR Validation
++
++on:
++  pull_request:
++    branches: [main]
++    types: [opened, synchronize, reopened]
++
++jobs:
++  validate-tasks:
++    name: Validate Task Format
++    runs-on: ubuntu-latest
++    
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 0  # Fetch all history for comparing changes
++
++      - name: Setup Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++          cache: 'npm'
++          cache-dependency-path: scripts/package.json
++
++      - name: Install dependencies
++        run: |
++          cd scripts
++          npm install
++
++      - name: Get changed files
++        id: changed-files
++        uses: tj-actions/changed-files@v44
++        with:
++          files: |
++            tasks/**/task.md
++            tasks/**/*.java
++            tasks/**/*.py
++            tasks/**/*.xml
++            tasks/**/*.json
++            tasks/**/*.properties
++            tasks/**/*.yml
++            tasks/**/*.yaml
++          files_ignore: |
++            scripts/**
++            .github/**
++            metadata.json
++            README.md
++
++      - name: Get changed task folders
++        id: changed-tasks
++        run: |
++          CHANGED_FOLDERS=""
++          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
++            FOLDER=$(echo "$file" | cut -d'/' -f1)
++            # Skip if folder starts with dot or is a known non-task folder
++            if [[ ! "$FOLDER" =~ ^\..*$ ]] && \
++               [[ "$FOLDER" != "scripts" ]] && \
++               [[ "$FOLDER" != "templates" ]] && \
++               [[ "$FOLDER" != "node_modules" ]] && \
++               [[ -d "$FOLDER" ]]; then
++              if [[ -f "$FOLDER/task.md" ]]; then
++                CHANGED_FOLDERS="$CHANGED_FOLDERS $FOLDER"
++              fi
++            fi
++          done
++          # Remove duplicates and trim
++          CHANGED_FOLDERS=$(echo "$CHANGED_FOLDERS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
++          echo "folders=$CHANGED_FOLDERS" >> $GITHUB_OUTPUT
++          echo "Changed task folders: $CHANGED_FOLDERS"
++
++      - name: Validate task format
++        if: steps.changed-tasks.outputs.folders != ''
++        id: validate
++        run: |
++          cd scripts
++          node validate-task.js .. ${{ steps.changed-tasks.outputs.folders }} > validation-report.md 2>&1 || true
++          cat validation-report.md
++          
++          # Check if validation passed
++          if grep -q "❌ Invalid tasks:" validation-report.md; then
++            INVALID_COUNT=$(grep "❌ Invalid tasks:" validation-report.md | grep -oP '\d+')
++            if [[ "$INVALID_COUNT" -gt 0 ]]; then
++              echo "validation_passed=false" >> $GITHUB_OUTPUT
++            else
++              echo "validation_passed=true" >> $GITHUB_OUTPUT
++            fi
++          else
++            echo "validation_passed=true" >> $GITHUB_OUTPUT
++          fi
++
++      - name: Comment PR with validation results
++        if: steps.changed-tasks.outputs.folders != '' && github.event_name == 'pull_request'
++        uses: actions/github-script@v7
++        with:
++          script: |
++            const fs = require('fs');
++            const report = fs.readFileSync('scripts/validation-report.md', 'utf8');
++            
++            // Find existing comment
++            const { data: comments } = await github.rest.issues.listComments({
++              owner: context.repo.owner,
++              repo: context.repo.repo,
++              issue_number: context.issue.number,
++            });
++            
++            const botComment = comments.find(comment => 
++              comment.user.type === 'Bot' && 
++              comment.body.includes('Task Validation Report')
++            );
++            
++            const body = `## 🔍 Task Validation Report\n\n${report}`;
++            
++            if (botComment) {
++              await github.rest.issues.updateComment({
++                owner: context.repo.owner,
++                repo: context.repo.repo,
++                comment_id: botComment.id,
++                body: body
++              });
++            } else {
++              await github.rest.issues.createComment({
++                owner: context.repo.owner,
++                repo: context.repo.repo,
++                issue_number: context.issue.number,
++                body: body
++              });
++            }
++
++      - name: Fail if validation errors
++        if: steps.validate.outputs.validation_passed == 'false'
++        run: |
++          echo "❌ Task validation failed. Please fix the errors above."
++          exit 1
++
++  check-metadata:
++    name: Check Metadata Regeneration
++    runs-on: ubuntu-latest
++    
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Setup Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++          cache: 'npm'
++          cache-dependency-path: scripts/package.json
++
++      - name: Install dependencies
++        run: |
++          cd scripts
++          npm install
++
++      - name: Generate metadata and check for differences
++        run: |
++          # Save current metadata
++          cp metadata.json metadata.json.original
++          
++          # Regenerate metadata
++          cd scripts
++          npm start
++          cd ..
++          
++          # Compare
++          if ! diff -q metadata.json metadata.json.original > /dev/null 2>&1; then
++            echo "⚠️ metadata.json is out of date!"
++            echo "Please run 'cd scripts && npm start' and commit the updated metadata.json"
++            echo ""
++            echo "Differences:"
++            diff metadata.json.original metadata.json || true
++            exit 1
++          else
++            echo "✅ metadata.json is up to date"
++          fi
+diff --git a/.github/workflows/security-scan.yml b/.github/workflows/security-scan.yml
+new file mode 100644
+index 0000000..1c80481
+--- /dev/null
++++ b/.github/workflows/security-scan.yml
+@@ -0,0 +1,220 @@
++name: Security Scan
++
++on:
++  pull_request:
++    branches: [main]
++    types: [opened, synchronize, reopened]
++  push:
++    branches: [main]
++  workflow_dispatch:  # Allow manual triggering
++
++jobs:
++  security-scan:
++    name: Security Scan Tasks
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      pull-requests: write
++    
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++
++      - name: Setup Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++          cache: 'npm'
++          cache-dependency-path: scripts/package.json
++
++      - name: Install dependencies
++        run: |
++          cd scripts
++          npm install
++
++      - name: Get changed files (PR only)
++        if: github.event_name == 'pull_request'
++        id: changed-files
++        uses: tj-actions/changed-files@v44
++        with:
++          files: |
++            tasks/**/task.md
++            tasks/**/*.java
++            tasks/**/*.py
++            tasks/**/*.xml
++            tasks/**/*.json
++            tasks/**/*.properties
++            tasks/**/*.yml
++            tasks/**/*.yaml
++            tasks/**/*.md
++            tasks/**/*.sh
++            tasks/**/*.ps1
++          files_ignore: |
++            scripts/**
++            .github/**
++            metadata.json
++            README.md
++            CONTRIBUTING.md
++            SECURITY.md
++
++      - name: Get changed task folders (PR only)
++        if: github.event_name == 'pull_request'
++        id: changed-tasks
++        run: |
++          CHANGED_FOLDERS=""
++          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
++            # Extract task folder name from tasks/<folder>/...
++            if [[ "$file" == tasks/* ]]; then
++              FOLDER=$(echo "$file" | cut -d'/' -f2)
++              if [[ -n "$FOLDER" ]] && [[ -d "tasks/$FOLDER" ]] && [[ -f "tasks/$FOLDER/task.md" ]]; then
++                CHANGED_FOLDERS="$CHANGED_FOLDERS $FOLDER"
++              fi
++            fi
++          done
++          CHANGED_FOLDERS=$(echo "$CHANGED_FOLDERS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
++          echo "folders=$CHANGED_FOLDERS" >> $GITHUB_OUTPUT
++          echo "Changed task folders: $CHANGED_FOLDERS"
++
++      - name: Run security scan (PR - changed tasks only)
++        if: github.event_name == 'pull_request' && steps.changed-tasks.outputs.folders != ''
++        id: security-scan-pr
++        run: |
++          cd scripts
++          node security-scan.js .. ${{ steps.changed-tasks.outputs.folders }} > security-report.md 2>&1 || true
++          node security-scan.js --json .. ${{ steps.changed-tasks.outputs.folders }} > security-report.json 2>&1 || true
++          cat security-report.md
++          
++          # Parse JSON for status
++          CRITICAL=$(jq '.summary.critical' security-report.json)
++          HIGH=$(jq '.summary.high' security-report.json)
++          
++          if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
++            echo "scan_passed=false" >> $GITHUB_OUTPUT
++          else
++            echo "scan_passed=true" >> $GITHUB_OUTPUT
++          fi
++
++      - name: Run security scan (full repository)
++        if: github.event_name != 'pull_request' || steps.changed-tasks.outputs.folders == ''
++        id: security-scan-full
++        run: |
++          cd scripts
++          node security-scan.js .. > security-report.md 2>&1 || true
++          node security-scan.js --json .. > security-report.json 2>&1 || true
++          cat security-report.md
++          
++          CRITICAL=$(jq '.summary.critical' security-report.json)
++          HIGH=$(jq '.summary.high' security-report.json)
++          
++          if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
++            echo "scan_passed=false" >> $GITHUB_OUTPUT
++          else
++            echo "scan_passed=true" >> $GITHUB_OUTPUT
++          fi
++
++      - name: Comment PR with security results
++        if: github.event_name == 'pull_request'
++        uses: actions/github-script@v7
++        with:
++          script: |
++            const fs = require('fs');
++            let report = '';
++            
++            try {
++              report = fs.readFileSync('scripts/security-report.md', 'utf8');
++            } catch (e) {
++              report = 'No security issues to report or no task files changed.';
++            }
++            
++            const { data: comments } = await github.rest.issues.listComments({
++              owner: context.repo.owner,
++              repo: context.repo.repo,
++              issue_number: context.issue.number,
++            });
++            
++            const botComment = comments.find(comment => 
++              comment.user.type === 'Bot' && 
++              comment.body.includes('Security Scan Report')
++            );
++            
++            const body = `## 🔒 Security Scan Report\n\n${report}`;
++            
++            if (botComment) {
++              await github.rest.issues.updateComment({
++                owner: context.repo.owner,
++                repo: context.repo.repo,
++                comment_id: botComment.id,
++                body: body
++              });
++            } else {
++              await github.rest.issues.createComment({
++                owner: context.repo.owner,
++                repo: context.repo.repo,
++                issue_number: context.issue.number,
++                body: body
++              });
++            }
++
++      - name: Upload security report artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: security-report
++          path: |
++            scripts/security-report.md
++            scripts/security-report.json
++          retention-days: 30
++
++      - name: Fail if critical/high issues found
++        if: steps.security-scan-pr.outputs.scan_passed == 'false' || steps.security-scan-full.outputs.scan_passed == 'false'
++        run: |
++          echo "❌ Security scan failed. Critical or high severity issues found."
++          echo "Please review and fix the security issues before merging."
++          exit 1
++
++  content-safety-check:
++    name: Content Safety Check
++    runs-on: ubuntu-latest
++    
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Check for suspicious content patterns
++        run: |
++          echo "Checking for suspicious content patterns..."
++          
++          SUSPICIOUS_FOUND=false
++          
++          # Check for common obfuscation patterns
++          if grep -rP '\\x[0-9a-fA-F]{2}' --include="*.md" --include="*.txt" . 2>/dev/null | grep -v '.git'; then
++            echo "⚠️ Found hex-encoded content"
++            SUSPICIOUS_FOUND=true
++          fi
++          
++          # Check for extremely long lines (potential obfuscation)
++          if find . -name "*.md" -exec awk 'length > 2000 {print FILENAME": line "NR" is "length" chars"}' {} \; 2>/dev/null | grep -v '.git' | head -10; then
++            echo "⚠️ Found extremely long lines"
++            SUSPICIOUS_FOUND=true
++          fi
++          
++          # Check for invisible characters
++          if grep -rP '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]' --include="*.md" . 2>/dev/null | grep -v '.git' | head -10; then
++            echo "⚠️ Found invisible/control characters"
++            SUSPICIOUS_FOUND=true
++          fi
++          
++          # Check for common prompt injection phrases
++          if grep -riE "ignore previous|disregard above|forget everything|you are now|system prompt" --include="*.md" . 2>/dev/null | grep -v '.git' | grep -v '.github'; then
++            echo "⚠️ Found potential prompt injection patterns"
++            SUSPICIOUS_FOUND=true
++          fi
++          
++          if [ "$SUSPICIOUS_FOUND" = true ]; then
++            echo ""
++            echo "⚠️ Suspicious content patterns detected. Please review manually."
++            # Don't fail the build, just warn
++          else
++            echo "✅ No suspicious content patterns found"
++          fi
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+new file mode 100644
+index 0000000..24c4dee
+--- /dev/null
++++ b/CONTRIBUTING.md
+@@ -0,0 +1,264 @@
++# Contributing to appmod-custom-tasks
++
++Thank you for your interest in contributing to the App Modernization Custom Tasks repository! This document provides guidelines and instructions for contributing.
++
++## Table of Contents
++
++- [Code of Conduct](#code-of-conduct)
++- [How to Contribute](#how-to-contribute)
++- [Creating a New Task](#creating-a-new-task)
++- [Pull Request Process](#pull-request-process)
++- [Style Guidelines](#style-guidelines)
++- [Quality Standards](#quality-standards)
++
++## Code of Conduct
++
++By participating in this project, you agree to maintain a respectful and inclusive environment. Please:
++
++- Be respectful and constructive in discussions
++- Focus on the content, not the person
++- Accept constructive criticism gracefully
++- Help others learn and grow
++
++## How to Contribute
++
++### Types of Contributions
++
++1. **New Tasks**: Add migration patterns for new technology combinations
++2. **Task Improvements**: Enhance existing tasks with better examples or documentation
++3. **Bug Fixes**: Fix issues in existing tasks
++4. **Documentation**: Improve README, comments, or add tutorials
++5. **Tools**: Enhance the validation or scanning scripts
++
++### Getting Started
++
++1. **Fork the repository** on GitHub
++2. **Clone your fork** locally:
++   ```bash
++   git clone https://github.com/YOUR-USERNAME/appmod-custom-tasks.git
++   cd appmod-custom-tasks
++   ```
++3. **Install dependencies**:
++   ```bash
++   cd scripts
++   npm install
++   ```
++4. **Create a branch** for your changes:
++   ```bash
++   git checkout -b feature/my-new-task
++   ```
++
++## Creating a New Task
++
++### Step 1: Plan Your Task
++
++Before creating a task, consider:
++
++- What technologies does this task migrate between?
++- What are the key transformation steps?
++- What code examples would be helpful?
++- Are there any prerequisites or limitations?
++
++### Step 2: Create the Task Folder
++
++Create a new folder inside `tasks/` with a descriptive, lowercase, hyphenated name:
++
++```bash
++mkdir tasks/my-source-to-my-target
++```
++
++**Naming Guidelines:**
++- Use lowercase letters and hyphens only
++- Format: `source-to-target` or `descriptive-action`
++- Examples: `aws-s3-to-azure-blob`, `log4j-to-azure-monitor`, `spring-security-upgrade`
++
++### Step 3: Create task.md
++
++Create the main task file with required YAML frontmatter:
++
++```markdown
++---
++id: my-source-to-my-target
++name: Migrate My Source to My Target
++type: task
++---
++
++# Migrate My Source to My Target
++
++## Overview
++Brief description of what this task accomplishes.
++
++## Prerequisites
++- Required software/versions
++- Required accounts/access
++
++## Migration Steps
++
++### 1. Update Dependencies
++Explain dependency changes...
++
++### 2. Update Configuration
++Explain configuration changes...
++
++### 3. Transform Code
++Explain code transformations...
++
++## Testing
++How to verify the migration was successful...
++
++## Common Issues
++Known issues and their solutions...
++```
++
++### Step 4: Add Supporting Files (Optional)
++
++Include helpful examples and templates:
++
++- `before-example.java` - Code before migration
++- `after-example.java` - Code after migration
++- `config.properties.template` - Configuration template
++- `changes.diff` - Git diff showing transformations
++
++### Step 5: Update Metadata
++
++Run the metadata generation script:
++
++```bash
++cd scripts
++npm start
++```
++
++### Step 6: Validate Your Task
++
++```bash
++cd scripts
++npm run validate
++npm run security-scan
++```
++
++### Step 7: Test Locally
++
++If possible, test your task with the App Modernization extension locally before submitting.
++
++## Pull Request Process
++
++### Before Submitting
++
++1. ✅ Ensure your task follows the format specification
++2. ✅ Run `npm start` to update metadata.json
++3. ✅ Run `npm run validate` with no errors
++4. ✅ Run `npm run security-scan` with no critical/high issues
++5. ✅ Review your changes for sensitive information
++
++### Submitting Your PR
++
++1. **Push your branch** to your fork:
++   ```bash
++   git add .
++   git commit -m "Add: my-source-to-my-target migration task"
++   git push origin feature/my-new-task
++   ```
++
++2. **Create a Pull Request** on GitHub with:
++   - Clear title describing the change
++   - Description of what the task does
++   - Any relevant context or testing information
++
++### PR Review Process
++
++1. **Automated Checks**: 
++   - Format validation
++   - Security scan
++   - Metadata verification
++
++2. **Manual Review**:
++   - Content quality
++   - Technical accuracy
++   - Documentation clarity
++
++3. **Feedback**: Address any requested changes
++
++4. **Merge**: Once approved, your PR will be merged
++
++### PR Title Format
++
++Use conventional commit format:
++
++- `Add: task-name` - New task
++- `Fix: task-name` - Bug fix
++- `Update: task-name` - Task improvement
++- `Docs: description` - Documentation update
++- `Chore: description` - Maintenance/tooling
++
++## Style Guidelines
++
++### Task Content
++
++- Use clear, concise language
++- Provide step-by-step instructions
++- Include code examples with proper syntax highlighting
++- Document prerequisites and assumptions
++- Include testing/verification steps
++
++### Code Examples
++
++```markdown
++**Before (Source Technology):**
++```java
++// Source code example
++```
++
++**After (Target Technology):**
++```java
++// Target code example
++```
++```
++
++### Markdown Formatting
++
++- Use proper heading hierarchy (# → ## → ###)
++- Use code blocks with language identifiers
++- Use tables for comparison/mapping information
++- Include blank lines between sections
++
++## Quality Standards
++
++### Task Content Must:
++
++- ✅ Be technically accurate
++- ✅ Work with current versions of technologies
++- ✅ Include practical, runnable examples
++- ✅ Cover common use cases
++- ✅ Document known limitations
++
++### Task Content Must NOT:
++
++- ❌ Include hardcoded credentials or secrets
++- ❌ Include personal or proprietary information
++- ❌ Contain prompt injection attempts
++- ❌ Include malicious commands or code
++- ❌ Violate any copyrights
++
++### Security Considerations
++
++Since tasks are used as AI prompts, be mindful of:
++
++- Avoid patterns that could be interpreted as prompt injection
++- Don't include commands that could be destructive if misinterpreted
++- Be explicit about when elevated permissions are needed
++- Use placeholders for sensitive values (e.g., `${CONNECTION_STRING}`)
++
++## Getting Help
++
++- 📖 Check existing tasks for examples
++- 💬 Open a Discussion for questions
++- 🐛 Open an Issue for problems
++
++## Recognition
++
++Contributors are recognized in:
++- Git commit history
++- Release notes (for significant contributions)
++- Contributors section (coming soon)
++
++Thank you for contributing to the App Modernization community! 🎉
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..3661445
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2024 App Modernization Custom Tasks Contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/README.md b/README.md
+index 792d090..10caef7 100644
+--- a/README.md
++++ b/README.md
+@@ -3 +3 @@
+-This repository contains custom migration tasks for the GitHub Copilot App Modernization extension.
++A community-driven repository of custom migration tasks for the GitHub Copilot App Modernization VS Code extension.
+@@ -5 +5,12 @@ This repository contains custom migration tasks for the GitHub Copilot App Moder
+-## Repository Structure
++## Overview
++
++This repository serves as a central hub for sharing and distributing custom migration tasks. Users can:
++
++- 🔍 **Browse** existing tasks to find migration patterns
++- 📥 **Download** tasks to use in their local development environment
++- 📤 **Contribute** new tasks by submitting pull requests
++- 🔒 **Host privately** using the template branch for private/enterprise repositories
++
++## Quick Start
++
++### Using Tasks from This Repository
+@@ -7 +18,13 @@ This repository contains custom migration tasks for the GitHub Copilot App Moder
+-This repository has a consolidated `metadata.json` file in the root that indexes all available tasks:
++1. **Configure the repository URL** in your VS Code settings for the GitHub Copilot App Modernization extension
++2. **Browse available tasks** in the extension
++3. **Download and use** any task that fits your migration needs
++
++### Contributing a New Task
++
++1. Fork this repository
++2. Create a new folder in `tasks/` with your task ID (e.g., `tasks/mysql-to-postgresql`)
++3. Add required files following the [Task Format Specification](#task-format-specification)
++4. Run `cd scripts && npm install && npm start` to update metadata
++5. Submit a pull request
++
++## Repository Structure
+@@ -10,10 +33,19 @@ This repository has a consolidated `metadata.json` file in the root that indexes
+-metadata.json            # Central metadata for all tasks (auto-generated)
+-scripts/
+-  ├── generate-metadata.js  # Script to generate metadata.json
+-  ├── package.json          # Node.js dependencies
+-  └── node_modules/         # Installed dependencies
+-task-id/
+-  ├── task.md           # Main task definition (required)
+-  ├── example.java      # Code examples (optional)
+-  ├── config.json       # Configuration files (optional)
+-  └── changes.diff      # Git diff files (optional)
++appmod-custom-tasks/
++├── metadata.json              # Auto-generated task index
++├── README.md                  # This file
++├── CONTRIBUTING.md            # Contribution guidelines
++├── SECURITY.md               # Security policy
++├── scripts/
++│   ├── generate-metadata.js  # Generates metadata.json
++│   ├── validate-task.js      # Validates task format
++│   ├── security-scan.js      # Security scanner
++│   └── package.json          # Node.js dependencies
++├── tasks/                     # All task folders go here
++│   └── <task-id>/
++│       ├── task.md           # Main task definition (required)
++│       └── ...               # Additional files (optional)
++├── templates/                 # Templates for private repos
++└── .github/
++    └── workflows/
++        ├── pr-validation.yml  # PR format validation
++        └── security-scan.yml  # Security scanning
+@@ -22 +54 @@ task-id/
+-**Note:** Task folders use a flat structure - all files are placed directly in the task folder, not in subdirectories.
++## Task Format Specification
+@@ -24 +56 @@ task-id/
+-## Generating Metadata
++### Folder Structure
+@@ -26 +58 @@ task-id/
+-The `metadata.json` file is auto-generated from the task.md files:
++Each task must be in its own folder inside the `tasks/` directory:
+@@ -28,4 +59,0 @@ The `metadata.json` file is auto-generated from the task.md files:
+-```bash
+-cd scripts
+-npm install  # First time only
+-npm start    # Generates metadata.json
+@@ -33,17 +61,7 @@ npm start    # Generates metadata.json
+-
+-The script scans all task folders and extracts information from the YAML frontmatter in each `task.md` file.
+-
+-## Repository Requirements
+-
+-### 1. metadata.json (Auto-Generated - Root Level)
+-Central metadata file containing all tasks. Generated automatically by running `npm start` in the scripts folder:
+-```json
+-{
+-  "tasks": [
+-    {
+-      "id": "task-id",
+-      "name": "Task Display Name",
+-      "path": "task path"
+-    }
+-  ]
+-}
++tasks/
++└── my-task-id/
++    ├── task.md                    # Required: Main task definition
++    ├── example-before.java        # Optional: Before code example
++    ├── example-after.java         # Optional: After code example
++    ├── config.properties.template # Optional: Configuration template
++    └── README.md                  # Optional: Additional documentation
+@@ -52,2 +70,9 @@ Central metadata file containing all tasks. Generated automatically by running `
+-### 2. task.md (Required - Per Task)
+-The main task definition file with YAML front matter and markdown content:
++### Naming Conventions
++
++- **Folder name**: Lowercase with hyphens (e.g., `aws-s3-to-azure-blob`)
++- **Folder name should match the task ID** in the frontmatter
++
++### task.md Requirements
++
++The `task.md` file must include YAML frontmatter:
++
+@@ -56,2 +81,2 @@ The main task definition file with YAML front matter and markdown content:
+-id: task-id
+-name: Task Name
++id: my-task-id
++name: Human Readable Task Name
+@@ -61 +86,34 @@ type: task
+-**Prompt:**
++# Task Title
++
++Your task content in Markdown format...
++```
++
++#### Required Frontmatter Fields
++
++| Field | Description | Example |
++|-------|-------------|---------|
++| `id` | Unique identifier (should match folder name) | `aws-s3-to-azure-blob` |
++| `name` | Human-readable display name | `Migrate AWS S3 to Azure Blob Storage` |
++| `type` | Task type (currently only `task`) | `task` |
++
++### Additional Files
++
++You can include any supporting files in your task folder:
++
++- **Code examples** (`.java`, `.py`, `.cs`, etc.)
++- **Configuration templates** (`.properties`, `.yml`, `.json`)
++- **Git diff files** (`.diff`, `.patch`)
++- **Documentation** (`.md`)
++
++All files should be placed directly in the task folder (no subdirectories).
++
++## Available Tasks
++
++| Task ID | Description |
++|---------|-------------|
++| `aws-s3-to-azure-blob` | Migrate AWS S3 to Azure Blob Storage |
++| `kafka-to-eventhubs` | Migrate Kafka to Azure Event Hubs |
++| `log4j-to-azure-monitor-03` | Integrate Azure Monitor Application Insights |
++| `rabbitmq-to-servicebus` | Migrate RabbitMQ to Azure Service Bus |
++
++## Development
+@@ -63 +121 @@ type: task
+-Your task instructions here
++### Prerequisites
+@@ -65,3 +123,8 @@ Your task instructions here
+-**References:**
+-- file:///example.java
+-- git+file:///changes.diff
++- Node.js 18+ 
++- npm
++
++### Setup
++
++```bash
++cd scripts
++npm install
+@@ -70,6 +133 @@ Your task instructions here
+-### 3. Additional Files (Optional)
+-All additional files should be placed directly in the task folder:
+-- Code examples (e.g., `example.java`, `sample.py`)
+-- Configuration files (e.g., `config.json`, `settings.properties`)
+-- Git diff files (e.g., `changes.diff`)
+-- Any other reference materials
++### Generate Metadata
+@@ -77 +135 @@ All additional files should be placed directly in the task folder:
+-## Using This Repository
++After adding or modifying tasks, regenerate the metadata:
+@@ -79,10 +137,33 @@ All additional files should be placed directly in the task folder:
+-1. **Local Testing**: Place this folder in your workspace
+-2. **Remote Hosting**: Push to a public Git repository
+-3. **Configuration**: Add the repository URL (e.g., `my-new-task`)
+-2. Add `task.md` with YAML frontmatter:
+-   ```markdown
+-   ---
+-   id: my-new-task
+-   name: My New Task Name
+-   type: task
+-   ---
++```bash
++cd scripts
++npm start
++```
++
++### Validate Tasks
++
++To validate task format locally:
++
++```bash
++cd scripts
++npm run validate
++```
++
++### Security Scan
++
++To run security scan locally:
++
++```bash
++cd scripts
++npm run security-scan
++```
++
++## Private Repository Setup
++
++For teams that want to maintain their own private task repository:
++
++### Option 1: Fork and Make Private
++
++1. Fork this repository
++2. Make the fork private in repository settings
++3. Add your custom tasks
++4. Configure the extension to use your private repository URL
+@@ -90 +171,10 @@ All additional files should be placed directly in the task folder:
+-   # Your task content here
++### Option 2: Use the Template Branch
++
++1. Create a new private repository
++2. Copy the template structure from the `template` branch:
++   ```bash
++   git clone --branch template https://github.com/backwind1233/appmod-custom-tasks.git my-private-tasks
++   cd my-private-tasks
++   git remote remove origin
++   git remote add origin <your-private-repo-url>
++   git push -u origin main
+@@ -92,8 +182,47 @@ All additional files should be placed directly in the task folder:
+-3. Include helpful examples and documentation in the task folder
+-4. Run `cd scripts && npm start` to regenerate `metadata.json`
+-To add a new task:
+-1. Create a new folder with a descriptive ID
+-2. Add task.md with the migration instructions
+-3. Update the root metadata.json to include your task
+-4. Include helpful examples and documentation
+-5. Test locally before publishing
++3. See [templates/TEMPLATE-README.md](templates/TEMPLATE-README.md) for detailed setup instructions
++
++## Pull Request Process
++
++1. **Format Validation**: Automated checks ensure your task follows the correct format
++2. **Security Scan**: Tasks are scanned for potential security issues (prompt injection, malicious content)
++3. **Review**: Maintainers review the task content and quality
++4. **Merge**: Once approved, your task becomes available to all users
++
++### PR Requirements
++
++- [ ] Task folder follows naming conventions
++- [ ] `task.md` includes required frontmatter
++- [ ] `metadata.json` is updated (run `npm start`)
++- [ ] No security scan warnings
++- [ ] Clear documentation in task content
++
++## Security
++
++Tasks in this repository are prompts used by AI agents. We take security seriously:
++
++- **Automated scanning** for prompt injection attempts
++- **Pattern detection** for malicious commands
++- **Manual review** of all contributions
++
++See [SECURITY.md](SECURITY.md) for our security policy and how to report vulnerabilities.
++
++## Contributing
++
++We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
++
++### Types of Contributions
++
++- 🆕 **New Tasks**: Migration patterns for different technologies
++- 🐛 **Bug Fixes**: Fixes to existing tasks
++- 📖 **Documentation**: Improvements to task documentation
++- 🔧 **Tools**: Improvements to scripts and automation
++
++## License
++
++This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
++
++## Support
++
++- 📖 [Documentation](https://github.com/backwind1233/appmod-custom-tasks/wiki)
++- 🐛 [Issue Tracker](https://github.com/backwind1233/appmod-custom-tasks/issues)
++- 💬 [Discussions](https://github.com/backwind1233/appmod-custom-tasks/discussions)
+diff --git a/SECURITY.md b/SECURITY.md
+new file mode 100644
+index 0000000..3949eb8
+--- /dev/null
++++ b/SECURITY.md
+@@ -0,0 +1,181 @@
++# Security Policy
++
++## Overview
++
++This repository contains custom tasks (prompts) for the GitHub Copilot App Modernization VS Code extension. Because these tasks are executed by AI agents, security is a critical concern.
++
++## Supported Versions
++
++| Version | Supported          |
++| ------- | ------------------ |
++| main    | ✅ Yes             |
++| template | ✅ Yes            |
++| Other branches | ❌ No       |
++
++## Security Measures
++
++### Automated Scanning
++
++All contributions are automatically scanned for:
++
++1. **Prompt Injection Attempts**
++   - Instruction override patterns
++   - System prompt extraction attempts
++   - Role hijacking attempts
++   - Jailbreak attempts
++
++2. **Malicious Commands**
++   - Destructive system commands
++   - Data exfiltration patterns
++   - Remote code execution patterns
++   - Credential harvesting attempts
++
++3. **Code Security Issues**
++   - Hardcoded credentials
++   - Dangerous eval/exec patterns
++   - Suspicious network activity
++   - Security bypass flags
++
++### Manual Review
++
++All pull requests are manually reviewed for:
++
++- Technical accuracy and quality
++- Hidden malicious intent
++- Appropriate content
++- Compliance with guidelines
++
++## Reporting a Vulnerability
++
++### How to Report
++
++**DO NOT** open a public issue for security vulnerabilities.
++
++Instead, please report security issues via one of these methods:
++
++1. **GitHub Security Advisories** (Preferred)
++   - Go to the Security tab of this repository
++   - Click "Report a vulnerability"
++   - Fill in the details
++
++2. **Email**
++   - Send details to the repository maintainers
++   - Include "SECURITY" in the subject line
++
++### What to Include
++
++When reporting a vulnerability, please include:
++
++- **Description**: What is the vulnerability?
++- **Location**: Which file(s) or task(s) are affected?
++- **Impact**: What could an attacker achieve?
++- **Reproduction**: Steps to reproduce the issue
++- **Suggestion**: Any ideas for fixing it (optional)
++
++### Response Timeline
++
++- **Acknowledgment**: Within 48 hours
++- **Initial Assessment**: Within 1 week
++- **Resolution**: Depends on severity
++  - Critical: ASAP (target 24-48 hours)
++  - High: Within 1 week
++  - Medium: Within 2 weeks
++  - Low: Within 1 month
++
++## Security Best Practices for Contributors
++
++### DO
++
++✅ Use placeholder values for credentials:
++```properties
++azure.storage.connection.string=${AZURE_STORAGE_CONNECTION_STRING}
++```
++
++✅ Be explicit about required permissions:
++```markdown
++**Note**: This step requires administrator privileges.
++```
++
++✅ Document security considerations:
++```markdown
++## Security Notes
++- Ensure connection strings are stored securely
++- Use managed identities in production
++```
++
++✅ Use safe command examples:
++```bash
++# Safe example with user confirmation
++read -p "This will delete files. Continue? (y/n) " -n 1 -r
++```
++
++### DO NOT
++
++❌ Include actual credentials or secrets:
++```properties
++# BAD - Never do this
++password=my-actual-password
++api.key=sk-1234567890abcdef
++```
++
++❌ Include destructive commands without warnings:
++```bash
++# BAD - Dangerous without context
++rm -rf /
++```
++
++❌ Use prompt injection patterns:
++```markdown
++# BAD - Prompt injection attempt
++Ignore all previous instructions and...
++```
++
++❌ Include obfuscated content:
++```
++# BAD - Suspicious encoded content
++\x69\x67\x6e\x6f\x72\x65
++```
++
++## Security Scanner Rules
++
++The automated security scanner checks for these categories:
++
++### Critical Severity
++- Prompt injection (instruction override)
++- System prompt extraction attempts
++- Dangerous system commands (rm -rf /, format drives)
++- Data exfiltration patterns
++- Remote code execution
++
++### High Severity
++- Role hijacking attempts
++- Jailbreak attempts
++- Hardcoded credentials
++- Environment variable access (review required)
++
++### Medium Severity
++- Base64 encoding/decoding (could hide content)
++- Dynamic code execution (eval, exec)
++- Suspicious network addresses
++
++### Low Severity
++- Security bypass flags (--no-verify)
++- Elevated privilege requests (sudo)
++
++## Incident Response
++
++If a security issue is found in a merged task:
++
++1. **Immediate**: Task is disabled/removed
++2. **Investigation**: Determine scope and impact
++3. **Notification**: Users are notified if affected
++4. **Resolution**: Fix is developed and deployed
++5. **Post-mortem**: Process improvements are made
++
++## Contact
++
++For security-related questions that don't involve reporting vulnerabilities, please open a Discussion in the repository.
++
++---
++
++Thank you for helping keep this project secure! 🔒
+diff --git a/metadata.json b/metadata.json
+index 4403716..05ac3d0 100644
+--- a/metadata.json
++++ b/metadata.json
+@@ -6 +6 @@
+-      "path": "aws-s3-to-azure-blob"
++      "path": "tasks/aws-s3-to-azure-blob"
+@@ -11 +11 @@
+-      "path": "kafka-to-eventhubs"
++      "path": "tasks/kafka-to-eventhubs"
+@@ -16 +16 @@
+-      "path": "log4j-to-azure-monitor-03"
++      "path": "tasks/log4j-to-azure-monitor"
+@@ -21 +21 @@
+-      "path": "rabbitmq-to-servicebus"
++      "path": "tasks/rabbitmq-to-servicebus"
+diff --git a/scripts/generate-metadata.js b/scripts/generate-metadata.js
+index 318fa92..ce751f8 100644
+--- a/scripts/generate-metadata.js
++++ b/scripts/generate-metadata.js
+@@ -4,0 +5,3 @@ const matter = require('gray-matter');
++// Tasks are stored in the tasks/ directory
++const TASKS_DIR = 'tasks';
++
+@@ -7,0 +11,8 @@ function generateMetadata() {
++  const tasksDir = path.join(rootDir, TASKS_DIR);
++
++  // Ensure tasks directory exists
++  if (!fs.existsSync(tasksDir)) {
++    console.log('No tasks directory found. Creating empty metadata.json');
++    fs.writeFileSync(path.join(rootDir, 'metadata.json'), JSON.stringify({ tasks: [] }, null, 2), 'utf8');
++    return;
++  }
+@@ -9,2 +20,2 @@ function generateMetadata() {
+-  // Read all directories in the root
+-  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
++  // Read all directories in the tasks folder
++  const entries = fs.readdirSync(tasksDir, { withFileTypes: true });
+@@ -13,2 +24,2 @@ function generateMetadata() {
+-    if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+-      const taskMdPath = path.join(rootDir, entry.name, 'task.md');
++    if (entry.isDirectory() && !entry.name.startsWith('.')) {
++      const taskMdPath = path.join(tasksDir, entry.name, 'task.md');
+@@ -27 +38 @@ function generateMetadata() {
+-              path: entry.name
++              path: `${TASKS_DIR}/${entry.name}`
+@@ -28,0 +40,2 @@ function generateMetadata() {
++          } else {
++            console.warn(`Warning: ${entry.name}/task.md is missing required frontmatter (id, name)`);
+@@ -36,0 +50,3 @@ function generateMetadata() {
++  // Sort tasks by id for consistent output
++  tasks.sort((a, b) => a.id.localeCompare(b.id));
++
+@@ -48,0 +65 @@ function generateMetadata() {
++  tasks.forEach(task => console.log(`  - ${task.id}: ${task.name}`));
+diff --git a/scripts/package.json b/scripts/package.json
+index 0dfd51e..4552edb 100644
+--- a/scripts/package.json
++++ b/scripts/package.json
+@@ -4 +4 @@
+-  "description": "Custom migration tasks repository",
++  "description": "Custom migration tasks repository for GitHub Copilot App Modernization",
+@@ -6 +6,5 @@
+-    "start": "node generate-metadata.js"
++    "start": "node generate-metadata.js",
++    "generate": "node generate-metadata.js",
++    "validate": "node validate-task.js ..",
++    "security-scan": "node security-scan.js ..",
++    "check": "npm run validate && npm run security-scan"
+diff --git a/scripts/security-scan.js b/scripts/security-scan.js
+new file mode 100644
+index 0000000..b2371dd
+--- /dev/null
++++ b/scripts/security-scan.js
+@@ -0,0 +1,406 @@
++const fs = require('fs');
++const path = require('path');
++const matter = require('gray-matter');
++
++/**
++ * Security Scanner for Task Files
++ * Scans task content for potential security issues, prompt injections, and malicious content
++ */
++
++// Security rule definitions
++const SECURITY_RULES = {
++  critical: [
++    {
++      id: 'PROMPT_INJECTION_001',
++      name: 'Instruction Override Attempt',
++      patterns: [
++        /ignore\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?|rules?|guidelines?)/gi,
++        /disregard\s+(all\s+)?(previous|above|prior)/gi,
++        /forget\s+(all\s+)?(previous|above|prior|everything)/gi,
++        /override\s+(all\s+)?(previous|above|prior|system)/gi,
++      ],
++      description: 'Detected attempt to override AI instructions',
++    },
++    {
++      id: 'PROMPT_INJECTION_002',
++      name: 'System Prompt Extraction',
++      patterns: [
++        /what\s+(is|are)\s+(your|the)\s+(system\s+)?prompt/gi,
++        /show\s+(me\s+)?(your|the)\s+(system\s+)?prompt/gi,
++        /reveal\s+(your|the)\s+(system\s+)?prompt/gi,
++        /print\s+(your|the)\s+(system\s+)?prompt/gi,
++      ],
++      description: 'Detected attempt to extract system prompts',
++    },
++    {
++      id: 'MALICIOUS_CMD_001',
++      name: 'Dangerous System Command',
++      patterns: [
++        /rm\s+-rf\s+\/(?!tmp)/gi,
++        /rmdir\s+\/s\s+\/q\s+[a-z]:\\/gi,
++        /format\s+[a-z]:\s*\/[qy]/gi,
++        /del\s+\/[fqs]\s+[a-z]:\\/gi,
++        /mkfs\s+/gi,
++        /dd\s+if=.*of=\/dev\//gi,
++      ],
++      description: 'Detected potentially destructive system command',
++    },
++    {
++      id: 'DATA_EXFIL_001',
++      name: 'Data Exfiltration Pattern',
++      patterns: [
++        /curl\s+.*-d\s+.*\$\(/gi,
++        /wget\s+.*--post-data/gi,
++        /curl\s+.*@.*\/etc\/passwd/gi,
++        /curl\s+.*@.*\.ssh\/id_rsa/gi,
++      ],
++      description: 'Detected potential data exfiltration attempt',
++    },
++    {
++      id: 'SHELL_INJECT_001',
++      name: 'Remote Code Execution',
++      patterns: [
++        /curl\s+.*\|\s*sh/gi,
++        /wget\s+.*\|\s*sh/gi,
++        /curl\s+.*\|\s*bash/gi,
++        /wget\s+.*\|\s*bash/gi,
++        /\$\(curl\s+/gi,
++        /\$\(wget\s+/gi,
++      ],
++      description: 'Detected remote code execution pattern',
++    },
++  ],
++  high: [
++    {
++      id: 'ROLE_HIJACK_001',
++      name: 'Role Hijacking Attempt',
++      patterns: [
++        /you\s+are\s+now\s+(a|an|the)/gi,
++        /from\s+now\s+on,?\s+you\s+(are|will\s+be)/gi,
++        /pretend\s+(you\s+are|to\s+be)/gi,
++        /act\s+as\s+(if\s+you|a|an|the)/gi,
++        /roleplay\s+as/gi,
++      ],
++      description: 'Detected attempt to change AI role',
++    },
++    {
++      id: 'JAILBREAK_001',
++      name: 'Jailbreak Attempt',
++      patterns: [
++        /\bDAN\b/g,
++        /do\s+anything\s+now/gi,
++        /jailbreak/gi,
++        /\bunlocked\s+mode\b/gi,
++        /developer\s+mode\s+(enabled|activated|on)/gi,
++      ],
++      description: 'Detected potential jailbreak attempt',
++    },
++    {
++      id: 'CREDENTIAL_001',
++      name: 'Hardcoded Credentials',
++      patterns: [
++        // Match actual credentials, but exclude obvious placeholders
++        /password\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
++        /api[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
++        /secret[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
++        /access[_-]?token\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
++        /private[_-]?key\s*[=:]\s*["'][^"'$<{\[\]]+["']/gi,
++      ],
++      description: 'Detected potential hardcoded credentials',
++      // Skip matches that look like placeholders
++      skipPatterns: [
++        /<your-/i,
++        /\${/,
++        /your-.*-here/i,
++        /example/i,
++        /placeholder/i,
++        /xxx/i,
++        /\*\*\*/,
++      ],
++    },
++  ],
++  medium: [
++    {
++      id: 'ENCODING_001',
++      name: 'Encoded Content',
++      patterns: [
++        /base64[_-]?decode/gi,
++        /atob\s*\(/gi,
++        /btoa\s*\(/gi,
++        /Buffer\.from\s*\([^)]+,\s*['"]base64['"]\)/gi,
++      ],
++      description: 'Detected base64 encoding/decoding which could hide malicious content',
++    },
++    {
++      id: 'EVAL_001',
++      name: 'Dynamic Code Execution',
++      patterns: [
++        /\beval\s*\(/gi,
++        /\bexec\s*\(/gi,
++        /Function\s*\(\s*["']/gi,
++        /new\s+Function\s*\(/gi,
++        /setTimeout\s*\(\s*["']/gi,
++        /setInterval\s*\(\s*["']/gi,
++      ],
++      description: 'Detected dynamic code execution pattern',
++    },
++  ],
++  low: [
++    {
++      id: 'OVERRIDE_001',
++      name: 'Configuration Override',
++      patterns: [
++        /--no-verify/gi,
++        /--skip-validation/gi,
++        /-f\s+--force/gi,
++        /--allow-root/gi,
++      ],
++      description: 'Detected security bypass flags',
++    },
++    {
++      id: 'SUDO_001',
++      name: 'Elevated Privilege Request',
++      patterns: [
++        /\bsudo\s+/gi,
++        /\bsu\s+-\s+/gi,
++        /Run\s+as\s+administrator/gi,
++      ],
++      description: 'Detected request for elevated privileges',
++    },
++  ],
++};
++
++const TASKS_DIR = 'tasks';
++
++class SecurityScanner {
++  constructor(rootDir) {
++    this.rootDir = rootDir;
++    this.tasksDir = path.join(rootDir, TASKS_DIR);
++    this.findings = [];
++  }
++
++  /**
++   * Scan a single file for security issues
++   */
++  scanFile(filePath, content) {
++    const findings = [];
++    const relativePath = path.relative(this.rootDir, filePath);
++
++    for (const [severity, rules] of Object.entries(SECURITY_RULES)) {
++      for (const rule of rules) {
++        for (const pattern of rule.patterns) {
++          // Reset regex lastIndex
++          pattern.lastIndex = 0;
++          let match;
++          while ((match = pattern.exec(content)) !== null) {
++            // Check if match should be skipped (e.g., placeholders)
++            if (rule.skipPatterns) {
++              const shouldSkip = rule.skipPatterns.some(skipPattern => skipPattern.test(match[0]));
++              if (shouldSkip) continue;
++            }
++
++            // Get line number
++            const lines = content.substring(0, match.index).split('\n');
++            const lineNumber = lines.length;
++
++            findings.push({
++              severity,
++              ruleId: rule.id,
++              ruleName: rule.name,
++              description: rule.description,
++              file: relativePath,
++              line: lineNumber,
++              match: match[0].substring(0, 100), // Truncate long matches
++            });
++          }
++        }
++      }
++    }
++
++    return findings;
++  }
++
++  /**
++   * Scan a task folder
++   */
++  scanTask(taskFolderName) {
++    const taskPath = path.join(this.tasksDir, taskFolderName);
++    const findings = [];
++
++    if (!fs.existsSync(taskPath) || !fs.statSync(taskPath).isDirectory()) {
++      return findings;
++    }
++
++    // Scan all files in task folder
++    const files = fs.readdirSync(taskPath);
++    for (const file of files) {
++      const filePath = path.join(taskPath, file);
++      if (fs.statSync(filePath).isFile()) {
++        try {
++          const content = fs.readFileSync(filePath, 'utf8');
++          findings.push(...this.scanFile(filePath, content));
++        } catch (error) {
++          console.error(`Error scanning ${filePath}: ${error.message}`);
++        }
++      }
++    }
++
++    return findings;
++  }
++
++  /**
++   * Scan all tasks in the repository
++   */
++  scanAll() {
++    if (!fs.existsSync(this.tasksDir)) {
++      console.error('No tasks directory found.');
++      return this.summarizeFindings();
++    }
++
++    const entries = fs.readdirSync(this.tasksDir, { withFileTypes: true });
++
++    for (const entry of entries) {
++      if (entry.isDirectory() && !entry.name.startsWith('.')) {
++        const taskMdPath = path.join(this.tasksDir, entry.name, 'task.md');
++        if (fs.existsSync(taskMdPath)) {
++          this.findings.push(...this.scanTask(entry.name));
++        }
++      }
++    }
++
++    return this.summarizeFindings();
++  }
++
++  /**
++   * Scan specific folders (for PR scanning)
++   */
++  scanFolders(folders) {
++    for (const folder of folders) {
++      this.findings.push(...this.scanTask(folder));
++    }
++
++    return this.summarizeFindings();
++  }
++
++  /**
++   * Summarize findings by severity
++   */
++  summarizeFindings() {
++    const summary = {
++      critical: [],
++      high: [],
++      medium: [],
++      low: [],
++      total: this.findings.length,
++    };
++
++    for (const finding of this.findings) {
++      summary[finding.severity].push(finding);
++    }
++
++    return summary;
++  }
++
++  /**
++   * Generate security report
++   */
++  generateReport(summary) {
++    let report = '# Security Scan Report\n\n';
++
++    // Summary section
++    report += '## Summary\n\n';
++    report += `| Severity | Count |\n`;
++    report += `|----------|-------|\n`;
++    report += `| 🔴 Critical | ${summary.critical.length} |\n`;
++    report += `| 🟠 High | ${summary.high.length} |\n`;
++    report += `| 🟡 Medium | ${summary.medium.length} |\n`;
++    report += `| 🟢 Low | ${summary.low.length} |\n`;
++    report += `| **Total** | **${summary.total}** |\n\n`;
++
++    // Status
++    if (summary.critical.length > 0 || summary.high.length > 0) {
++      report += '> ❌ **FAILED**: Critical or high severity issues found\n\n';
++    } else if (summary.medium.length > 0) {
++      report += '> ⚠️ **WARNING**: Medium severity issues found - review recommended\n\n';
++    } else if (summary.low.length > 0) {
++      report += '> ✅ **PASSED with notes**: Low severity issues found\n\n';
++    } else {
++      report += '> ✅ **PASSED**: No security issues found\n\n';
++    }
++
++    // Details by severity
++    const severities = ['critical', 'high', 'medium', 'low'];
++    const severityLabels = {
++      critical: '🔴 Critical',
++      high: '🟠 High',
++      medium: '🟡 Medium',
++      low: '🟢 Low',
++    };
++
++    for (const severity of severities) {
++      if (summary[severity].length > 0) {
++        report += `## ${severityLabels[severity]} Issues\n\n`;
++        
++        for (const finding of summary[severity]) {
++          report += `### ${finding.ruleId}: ${finding.ruleName}\n`;
++          report += `- **File:** ${finding.file}:${finding.line}\n`;
++          report += `- **Description:** ${finding.description}\n`;
++          report += `- **Match:** \`${finding.match}\`\n\n`;
++        }
++      }
++    }
++
++    return report;
++  }
++
++  /**
++   * Generate JSON report for CI/CD
++   */
++  generateJsonReport(summary) {
++    return JSON.stringify({
++      passed: summary.critical.length === 0 && summary.high.length === 0,
++      summary: {
++        critical: summary.critical.length,
++        high: summary.high.length,
++        medium: summary.medium.length,
++        low: summary.low.length,
++        total: summary.total,
++      },
++      findings: this.findings,
++    }, null, 2);
++  }
++}
++
++// CLI entry point
++if (require.main === module) {
++  const args = process.argv.slice(2);
++  const outputFormat = args.includes('--json') ? 'json' : 'markdown';
++  const filteredArgs = args.filter(arg => arg !== '--json');
++  
++  const rootDir = filteredArgs[0] || path.join(__dirname, '..');
++  const foldersToScan = filteredArgs.slice(1);
++
++  const scanner = new SecurityScanner(rootDir);
++  
++  let summary;
++  if (foldersToScan.length > 0) {
++    console.error(`Scanning folders: ${foldersToScan.join(', ')}`);
++    summary = scanner.scanFolders(foldersToScan);
++  } else {
++    console.error('Scanning all tasks...');
++    summary = scanner.scanAll();
++  }
++
++  if (outputFormat === 'json') {
++    console.log(scanner.generateJsonReport(summary));
++  } else {
++    console.log(scanner.generateReport(summary));
++  }
++
++  // Exit with error code if critical or high issues found
++  if (summary.critical.length > 0 || summary.high.length > 0) {
++    process.exit(1);
++  }
++}
++
++module.exports = { SecurityScanner };
+diff --git a/scripts/validate-task.js b/scripts/validate-task.js
+new file mode 100644
+index 0000000..a0d0441
+--- /dev/null
++++ b/scripts/validate-task.js
+@@ -0,0 +1,292 @@
++const fs = require('fs');
++const path = require('path');
++const matter = require('gray-matter');
++
++/**
++ * Task Validation Script
++ * Validates that task folders follow the required format specification
++ */
++
++const REQUIRED_FRONTMATTER_FIELDS = ['id', 'name', 'type'];
++const VALID_TASK_TYPES = ['task'];
++const TASKS_DIR = 'tasks';
++const FORBIDDEN_PATTERNS = [
++  // Potentially dangerous patterns in task content
++  /\beval\s*\(/gi,
++  /\bexec\s*\(/gi,
++  /\bprocess\.env/gi,
++  /\brequire\s*\(['"]\s*child_process/gi,
++  /\bspawn\s*\(/gi,
++  /\bshell\s*:/gi,
++  /rm\s+-rf\s+\//gi,
++  /\bsudo\b/gi,
++  /\bcurl\s+.*\|\s*sh/gi,
++  /\bwget\s+.*\|\s*sh/gi,
++];
++
++const SECURITY_PATTERNS = [
++  // Prompt injection patterns
++  { pattern: /ignore\s+(all\s+)?(previous|above)\s+(instructions?|prompts?)/gi, description: 'Prompt injection attempt' },
++  { pattern: /disregard\s+(all\s+)?(previous|above)/gi, description: 'Prompt injection attempt' },
++  { pattern: /forget\s+(all\s+)?(previous|above)/gi, description: 'Prompt injection attempt' },
++  { pattern: /you\s+are\s+now\s+(a|an)/gi, description: 'Role hijacking attempt' },
++  { pattern: /act\s+as\s+(if|a|an)/gi, description: 'Potential role manipulation' },
++  { pattern: /pretend\s+(you|to\s+be)/gi, description: 'Potential role manipulation' },
++  // Dangerous commands
++  { pattern: /\bformat\s+[a-z]:/gi, description: 'Potentially dangerous disk command' },
++  { pattern: /\bdel\s+\/[fqs]/gi, description: 'Potentially dangerous delete command' },
++  { pattern: /\brmdir\s+\/s/gi, description: 'Potentially dangerous directory removal' },
++];
++
++class TaskValidator {
++  constructor(rootDir) {
++    this.rootDir = rootDir;
++    this.errors = [];
++    this.warnings = [];
++  }
++
++  /**
++   * Validate a single task folder
++   */
++  validateTask(taskFolderName) {
++    const taskPath = path.join(this.rootDir, TASKS_DIR, taskFolderName);
++    const taskMdPath = path.join(taskPath, 'task.md');
++
++    // Check if task.md exists
++    if (!fs.existsSync(taskMdPath)) {
++      this.errors.push({
++        task: taskFolderName,
++        type: 'missing_file',
++        message: `Missing required file: task.md`
++      });
++      return false;
++    }
++
++    // Validate task.md content
++    try {
++      const content = fs.readFileSync(taskMdPath, 'utf8');
++      return this.validateTaskMd(taskFolderName, content);
++    } catch (error) {
++      this.errors.push({
++        task: taskFolderName,
++        type: 'read_error',
++        message: `Error reading task.md: ${error.message}`
++      });
++      return false;
++    }
++  }
++
++  /**
++   * Validate task.md content
++   */
++  validateTaskMd(taskFolderName, content) {
++    let isValid = true;
++
++    // Parse frontmatter
++    let data;
++    try {
++      const parsed = matter(content);
++      data = parsed.data;
++    } catch (error) {
++      this.errors.push({
++        task: taskFolderName,
++        type: 'frontmatter_error',
++        message: `Invalid YAML frontmatter: ${error.message}`
++      });
++      return false;
++    }
++
++    // Check required fields
++    for (const field of REQUIRED_FRONTMATTER_FIELDS) {
++      if (!data[field]) {
++        this.errors.push({
++          task: taskFolderName,
++          type: 'missing_field',
++          message: `Missing required frontmatter field: ${field}`
++        });
++        isValid = false;
++      }
++    }
++
++    // Validate field values
++    if (data.id && data.id !== taskFolderName) {
++      this.warnings.push({
++        task: taskFolderName,
++        type: 'id_mismatch',
++        message: `Task id "${data.id}" does not match folder name "${taskFolderName}"`
++      });
++    }
++
++    if (data.type && !VALID_TASK_TYPES.includes(data.type)) {
++      this.errors.push({
++        task: taskFolderName,
++        type: 'invalid_type',
++        message: `Invalid task type: ${data.type}. Valid types: ${VALID_TASK_TYPES.join(', ')}`
++      });
++      isValid = false;
++    }
++
++    // Check for forbidden patterns
++    for (const pattern of FORBIDDEN_PATTERNS) {
++      if (pattern.test(content)) {
++        this.errors.push({
++          task: taskFolderName,
++          type: 'forbidden_pattern',
++          message: `Content contains forbidden pattern: ${pattern.toString()}`
++        });
++        isValid = false;
++      }
++    }
++
++    // Check for security patterns
++    for (const { pattern, description } of SECURITY_PATTERNS) {
++      if (pattern.test(content)) {
++        this.warnings.push({
++          task: taskFolderName,
++          type: 'security_warning',
++          message: `${description}: ${pattern.toString()}`
++        });
++      }
++    }
++
++    return isValid;
++  }
++
++  /**
++   * Validate folder name format
++   */
++  validateFolderName(folderName) {
++    // Folder names should be lowercase with hyphens
++    const validPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
++    if (!validPattern.test(folderName)) {
++      this.warnings.push({
++        task: folderName,
++        type: 'naming_convention',
++        message: `Folder name should be lowercase with hyphens (e.g., "my-task-name")`
++      });
++    }
++  }
++
++  /**
++   * Validate all tasks in the repository
++   */
++  validateAll() {
++    const tasksDir = path.join(this.rootDir, TASKS_DIR);
++    
++    if (!fs.existsSync(tasksDir)) {
++      console.log('No tasks directory found.');
++      return { valid: 0, invalid: 0, errors: [], warnings: [] };
++    }
++
++    const entries = fs.readdirSync(tasksDir, { withFileTypes: true });
++
++    let validTasks = 0;
++    let invalidTasks = 0;
++
++    for (const entry of entries) {
++      if (entry.isDirectory() && !entry.name.startsWith('.')) {
++        // Check if this looks like a task folder (has task.md)
++        const taskMdPath = path.join(tasksDir, entry.name, 'task.md');
++        if (fs.existsSync(taskMdPath)) {
++          this.validateFolderName(entry.name);
++          if (this.validateTask(entry.name)) {
++            validTasks++;
++          } else {
++            invalidTasks++;
++          }
++        }
++      }
++    }
++
++    return {
++      valid: validTasks,
++      invalid: invalidTasks,
++      errors: this.errors,
++      warnings: this.warnings
++    };
++  }
++
++  /**
++   * Validate only changed tasks (for PR validation)
++   */
++  validateChangedTasks(changedFolders) {
++    let validTasks = 0;
++    let invalidTasks = 0;
++
++    for (const folder of changedFolders) {
++      this.validateFolderName(folder);
++      if (this.validateTask(folder)) {
++        validTasks++;
++      } else {
++        invalidTasks++;
++      }
++    }
++
++    return {
++      valid: validTasks,
++      invalid: invalidTasks,
++      errors: this.errors,
++      warnings: this.warnings
++    };
++  }
++
++  /**
++   * Generate report
++   */
++  generateReport(results) {
++    let report = '# Task Validation Report\n\n';
++
++    report += `## Summary\n`;
++    report += `- ✅ Valid tasks: ${results.valid}\n`;
++    report += `- ❌ Invalid tasks: ${results.invalid}\n`;
++    report += `- ⚠️ Warnings: ${results.warnings.length}\n\n`;
++
++    if (results.errors.length > 0) {
++      report += `## Errors\n\n`;
++      for (const error of results.errors) {
++        report += `### ${error.task}\n`;
++        report += `- **Type:** ${error.type}\n`;
++        report += `- **Message:** ${error.message}\n\n`;
++      }
++    }
++
++    if (results.warnings.length > 0) {
++      report += `## Warnings\n\n`;
++      for (const warning of results.warnings) {
++        report += `### ${warning.task}\n`;
++        report += `- **Type:** ${warning.type}\n`;
++        report += `- **Message:** ${warning.message}\n\n`;
++      }
++    }
++
++    return report;
++  }
++}
++
++// CLI entry point
++if (require.main === module) {
++  const args = process.argv.slice(2);
++  const rootDir = args[0] || path.join(__dirname, '..');
++  const changedFolders = args.slice(1);
++
++  const validator = new TaskValidator(rootDir);
++  
++  let results;
++  if (changedFolders.length > 0) {
++    console.log(`Validating changed tasks: ${changedFolders.join(', ')}`);
++    results = validator.validateChangedTasks(changedFolders);
++  } else {
++    console.log('Validating all tasks...');
++    results = validator.validateAll();
++  }
++
++  const report = validator.generateReport(results);
++  console.log(report);
++
++  // Exit with error code if there are errors
++  if (results.errors.length > 0) {
++    process.exit(1);
++  }
++}
++
++module.exports = { TaskValidator };
+diff --git a/aws-s3-to-azure-blob/after-blob.java b/tasks/aws-s3-to-azure-blob/after-blob.java
+similarity index 100%
+rename from aws-s3-to-azure-blob/after-blob.java
+rename to tasks/aws-s3-to-azure-blob/after-blob.java
+diff --git a/aws-s3-to-azure-blob/application.properties.template b/tasks/aws-s3-to-azure-blob/application.properties.template
+similarity index 100%
+rename from aws-s3-to-azure-blob/application.properties.template
+rename to tasks/aws-s3-to-azure-blob/application.properties.template
+diff --git a/aws-s3-to-azure-blob/before-s3.java b/tasks/aws-s3-to-azure-blob/before-s3.java
+similarity index 100%
+rename from aws-s3-to-azure-blob/before-s3.java
+rename to tasks/aws-s3-to-azure-blob/before-s3.java
+diff --git a/aws-s3-to-azure-blob/task.md b/tasks/aws-s3-to-azure-blob/task.md
+similarity index 100%
+rename from aws-s3-to-azure-blob/task.md
+rename to tasks/aws-s3-to-azure-blob/task.md
+diff --git a/kafka-to-eventhubs/kafka.properties.template b/tasks/kafka-to-eventhubs/kafka.properties.template
+similarity index 100%
+rename from kafka-to-eventhubs/kafka.properties.template
+rename to tasks/kafka-to-eventhubs/kafka.properties.template
+diff --git a/kafka-to-eventhubs/task.md b/tasks/kafka-to-eventhubs/task.md
+similarity index 100%
+rename from kafka-to-eventhubs/task.md
+rename to tasks/kafka-to-eventhubs/task.md
+diff --git a/log4j-to-azure-monitor-03/task.md b/tasks/log4j-to-azure-monitor/task.md
+similarity index 100%
+rename from log4j-to-azure-monitor-03/task.md
+rename to tasks/log4j-to-azure-monitor/task.md
+diff --git a/rabbitmq-to-servicebus/task.md b/tasks/rabbitmq-to-servicebus/task.md
+similarity index 100%
+rename from rabbitmq-to-servicebus/task.md
+rename to tasks/rabbitmq-to-servicebus/task.md
+diff --git a/templates/TEMPLATE-README.md b/templates/TEMPLATE-README.md
+new file mode 100644
+index 0000000..8026cbb
+--- /dev/null
++++ b/templates/TEMPLATE-README.md
+@@ -0,0 +1,243 @@
++# Private Task Repository Template
++
++This template provides everything you need to set up your own private task repository for the GitHub Copilot App Modernization VS Code extension.
++
++## Quick Setup
++
++### 1. Create Your Private Repository
++
++```bash
++# Option A: Clone the template branch
++git clone --branch template https://github.com/backwind1233/appmod-custom-tasks.git my-company-tasks
++cd my-company-tasks
++git remote remove origin
++git remote add origin <your-private-repo-url>
++git push -u origin main
++
++# Option B: Initialize a new repository
++mkdir my-company-tasks
++cd my-company-tasks
++git init
++# Copy template files from this folder
++```
++
++### 2. Repository Structure
++
++Your private repository should follow this structure:
++
++```
++my-company-tasks/
++├── metadata.json              # Auto-generated (run npm start)
++├── README.md                  # Your documentation
++├── scripts/
++│   ├── generate-metadata.js   # Copy from template
++│   ├── validate-task.js       # Copy from template (optional)
++│   ├── security-scan.js       # Copy from template (optional)
++│   └── package.json           # Copy from template
++└── tasks/                     # All task folders go here
++    └── your-task-folder/
++        ├── task.md            # Your task definition
++        └── ...                # Supporting files
++```
++
++### 3. Install Dependencies
++
++```bash
++cd scripts
++npm install
++```
++
++### 4. Create Your First Task
++
++1. Create a task folder:
++   ```bash
++   mkdir -p tasks/my-first-task
++   ```
++
++2. Create `tasks/my-first-task/task.md`:
++   ```markdown
++   ---
++   id: my-first-task
++   name: My First Migration Task
++   type: task
++   ---
++
++   # My First Migration Task
++
++   ## Overview
++   Describe what this task does...
++
++   ## Steps
++   1. First step
++   2. Second step
++   ```
++
++3. Generate metadata:
++   ```bash
++   cd scripts
++   npm start
++   ```
++
++### 5. Configure VS Code Extension
++
++Add your private repository URL to the extension settings. The format depends on how you host your repository:
++
++- **GitHub Private**: `https://github.com/your-org/your-repo.git`
++- **GitHub Enterprise**: `https://github.your-company.com/org/repo.git`
++- **Azure DevOps**: `https://dev.azure.com/org/project/_git/repo`
++- **GitLab**: `https://gitlab.com/your-org/your-repo.git`
++
++**Note**: You may need to configure authentication tokens for private repositories.
++
++## Template Files
++
++### Required Files
++
++| File | Purpose |
++|------|---------|
++| `scripts/generate-metadata.js` | Generates metadata.json from task folders |
++| `scripts/package.json` | Node.js dependencies and scripts |
++
++### Optional Files
++
++| File | Purpose |
++|------|---------|
++| `scripts/validate-task.js` | Validates task format (for CI/CD) |
++| `scripts/security-scan.js` | Security scanning (for CI/CD) |
++| `.github/workflows/*.yml` | GitHub Actions (if using GitHub) |
++
++## Task Format
++
++### task.md Structure
++
++```markdown
++---
++id: task-identifier
++name: Human Readable Name
++type: task
++---
++
++# Task Title
++
++## Overview
++Brief description of the migration task.
++
++## Prerequisites
++- Required tools/versions
++- Required access/accounts
++
++## Migration Steps
++
++### Step 1: Description
++Details...
++
++### Step 2: Description
++Details...
++
++## Verification
++How to verify the migration was successful.
++
++## Common Issues
++Known issues and solutions.
++```
++
++### Frontmatter Fields
++
++| Field | Required | Description |
++|-------|----------|-------------|
++| `id` | Yes | Unique identifier (should match folder name) |
++| `name` | Yes | Display name shown in the extension |
++| `type` | Yes | Must be `task` |
++
++## CI/CD Integration
++
++### GitHub Actions
++
++Copy `.github/workflows/pr-validation.yml` and `.github/workflows/security-scan.yml` from the main repository to enable automated validation.
++
++### Azure DevOps
++
++Create a pipeline with:
++
++```yaml
++trigger:
++  - main
++
++pool:
++  vmImage: 'ubuntu-latest'
++
++steps:
++  - task: NodeTool@0
++    inputs:
++      versionSpec: '20.x'
++
++  - script: |
++      cd scripts
++      npm install
++      npm run validate
++      npm run security-scan
++    displayName: 'Validate Tasks'
++```
++
++### GitLab CI
++
++Create `.gitlab-ci.yml`:
++
++```yaml
++validate:
++  image: node:20
++  script:
++    - cd scripts
++    - npm install
++    - npm run validate
++    - npm run security-scan
++```
++
++## Best Practices
++
++### Security
++
++1. **Never commit secrets** - Use environment variables or secret management
++2. **Review all tasks** - Even internal tasks should be reviewed
++3. **Use placeholders** - `${CONNECTION_STRING}` instead of actual values
++4. **Run security scans** - Integrate into your CI/CD pipeline
++
++### Organization
++
++1. **Consistent naming** - Use `source-to-target` format
++2. **Good documentation** - Include prerequisites and verification steps
++3. **Code examples** - Provide before/after code samples
++4. **Version control** - Tag releases for stability
++
++### Maintenance
++
++1. **Regular updates** - Keep tasks current with latest SDK versions
++2. **Test periodically** - Verify tasks still work as expected
++3. **Archive outdated tasks** - Move deprecated tasks to an archive folder
++
++## Syncing with Upstream
++
++To pull updates from the public repository:
++
++```bash
++# Add upstream remote (one-time)
++git remote add upstream https://github.com/backwind1233/appmod-custom-tasks.git
++
++# Fetch updates
++git fetch upstream template
++
++# Merge script updates (be selective)
++git checkout upstream/template -- scripts/generate-metadata.js
++git checkout upstream/template -- scripts/validate-task.js
++git checkout upstream/template -- scripts/security-scan.js
++
++# Commit
++git commit -m "Update scripts from upstream"
++```
++
++## Support
++
++For issues with:
++- **Template setup**: Open an issue in the main repository
++- **Extension features**: Contact GitHub Copilot support
++- **Your private tasks**: Internal support channels
+diff --git a/templates/example-task/config.properties.template b/templates/example-task/config.properties.template
+new file mode 100644
+index 0000000..0890d62
+--- /dev/null
++++ b/templates/example-task/config.properties.template
+@@ -0,0 +1,18 @@
++# Example Configuration Template
++# Replace placeholder values with your actual configuration
++
++# Connection Settings
++new.connection.endpoint=${NEW_SERVICE_ENDPOINT}
++new.connection.timeout=30000
++new.connection.retry.count=3
++
++# Authentication
++# Option 1: Connection String
++new.connection.string=${NEW_CONNECTION_STRING}
++
++# Option 2: Managed Identity (recommended for production)
++# new.identity.enabled=true
++# new.identity.client-id=${MANAGED_IDENTITY_CLIENT_ID}
++
++# Logging
++logging.level.com.example=INFO
+diff --git a/templates/example-task/example-after.java b/templates/example-task/example-after.java
+new file mode 100644
+index 0000000..e217ba5
+--- /dev/null
++++ b/templates/example-task/example-after.java
+@@ -0,0 +1,58 @@
++// Example: After migration (New API)
++package com.example.service;
++
++import com.example.newapi.NewClient;
++import com.example.newapi.NewClientBuilder;
++import com.example.newapi.credential.DefaultCredentialBuilder;
++import com.example.newapi.models.UploadResult;
++
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
++
++public class DataService {
++    
++    private final NewClient client;
++    
++    public DataService(String endpoint) {
++        // Using managed identity for authentication (recommended)
++        this.client = new NewClientBuilder()
++            .endpoint(endpoint)
++            .credential(new DefaultCredentialBuilder().build())
++            .buildClient();
++    }
++    
++    // Alternative constructor with connection string
++    public DataService(String connectionString, boolean useConnectionString) {
++        this.client = new NewClientBuilder()
++            .connectionString(connectionString)
++            .buildClient();
++    }
++    
++    public String uploadData(String container, String key, byte[] data) {
++        var containerClient = client.getContainerClient(container);
++        var blobClient = containerClient.getBlobClient(key);
++        
++        UploadResult result = blobClient.upload(
++            new ByteArrayInputStream(data), 
++            data.length,
++            true // overwrite if exists
++        );
++        
++        return result.getETag();
++    }
++    
++    public byte[] downloadData(String container, String key) {
++        var containerClient = client.getContainerClient(container);
++        var blobClient = containerClient.getBlobClient(key);
++        
++        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
++        blobClient.download(outputStream);
++        return outputStream.toByteArray();
++    }
++    
++    public void deleteData(String container, String key) {
++        var containerClient = client.getContainerClient(container);
++        var blobClient = containerClient.getBlobClient(key);
++        blobClient.delete();
++    }
++}
+diff --git a/templates/example-task/example-before.java b/templates/example-task/example-before.java
+new file mode 100644
+index 0000000..55c7c67
+--- /dev/null
++++ b/templates/example-task/example-before.java
+@@ -0,0 +1,37 @@
++// Example: Before migration (Old API)
++package com.example.service;
++
++import com.example.old.OldClient;
++import com.example.old.OldClientBuilder;
++import com.example.old.OldRequest;
++import com.example.old.OldResponse;
++
++public class DataService {
++    
++    private final OldClient client;
++    
++    public DataService(String endpoint, String accessKey) {
++        this.client = OldClientBuilder.create()
++            .withEndpoint(endpoint)
++            .withAccessKey(accessKey)
++            .build();
++    }
++    
++    public String uploadData(String container, String key, byte[] data) {
++        OldRequest request = new OldRequest()
++            .withContainer(container)
++            .withKey(key)
++            .withData(data);
++        
++        OldResponse response = client.upload(request);
++        return response.getId();
++    }
++    
++    public byte[] downloadData(String container, String key) {
++        return client.download(container, key);
++    }
++    
++    public void deleteData(String container, String key) {
++        client.delete(container, key);
++    }
++}
+diff --git a/templates/example-task/task.md b/templates/example-task/task.md
+new file mode 100644
+index 0000000..dddcb0d
+--- /dev/null
++++ b/templates/example-task/task.md
+@@ -0,0 +1,126 @@
++---
++id: example-task
++name: Example Migration Task
++type: task
++---
++
++# Example Migration Task
++
++This is a template task that demonstrates the expected format for migration tasks.
++
++## Overview
++
++Briefly describe what this task accomplishes and the technologies involved.
++
++## Prerequisites
++
++- Requirement 1 (e.g., Java 11 or higher)
++- Requirement 2 (e.g., Maven or Gradle project)
++- Requirement 3 (e.g., Access to Azure subscription)
++
++## Migration Steps
++
++### 1. Update Dependencies
++
++**Remove old dependencies:**
++```xml
++<!-- Remove from pom.xml -->
++<dependency>
++    <groupId>com.example</groupId>
++    <artifactId>old-library</artifactId>
++</dependency>
++```
++
++**Add new dependencies:**
++```xml
++<!-- Add to pom.xml -->
++<dependency>
++    <groupId>com.example</groupId>
++    <artifactId>new-library</artifactId>
++    <version>1.0.0</version>
++</dependency>
++```
++
++### 2. Update Configuration
++
++**Before:**
++```properties
++old.config.setting=value
++old.connection.string=${OLD_CONNECTION_STRING}
++```
++
++**After:**
++```properties
++new.config.setting=value
++new.connection.string=${NEW_CONNECTION_STRING}
++```
++
++### 3. Transform Code
++
++**Before (Old API):**
++```java
++// Old implementation
++OldClient client = OldClientBuilder.create()
++    .withEndpoint(endpoint)
++    .build();
++
++client.performOperation(data);
++```
++
++**After (New API):**
++```java
++// New implementation
++NewClient client = new NewClientBuilder()
++    .endpoint(endpoint)
++    .credential(new DefaultCredentialBuilder().build())
++    .buildClient();
++
++client.executeOperation(data);
++```
++
++### 4. Update Error Handling
++
++Ensure error handling is updated for the new API:
++
++```java
++try {
++    client.executeOperation(data);
++} catch (NewApiException e) {
++    // Handle new API exceptions
++    logger.error("Operation failed: {}", e.getMessage());
++    throw new RuntimeException("Migration operation failed", e);
++}
++```
++
++## Verification
++
++1. Run unit tests: `mvn test`
++2. Verify application starts: `mvn spring-boot:run`
++3. Test key functionality manually
++4. Check logs for any errors or warnings
++
++## Common Issues
++
++### Issue 1: Connection Timeout
++
++**Symptom:** Connection timeout errors after migration
++
++**Solution:** Update timeout settings in configuration:
++```properties
++new.connection.timeout=30000
++```
++
++### Issue 2: Authentication Failure
++
++**Symptom:** 401 Unauthorized errors
++
++**Solution:** Ensure credentials are properly configured:
++```bash
++export NEW_CONNECTION_STRING="your-connection-string"
++```
++
++## Additional Resources
++
++- [New API Documentation](https://example.com/docs)
++- [Migration Guide](https://example.com/migration)
++- [Troubleshooting](https://example.com/troubleshooting)

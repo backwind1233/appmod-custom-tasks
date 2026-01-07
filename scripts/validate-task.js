@@ -126,6 +126,25 @@ class TaskValidator {
       isValid = false;
     }
 
+    // Check for required **Prompt:** section
+    if (!content.includes('**Prompt:**')) {
+      this.errors.push({
+        task: taskFolderName,
+        type: 'missing_prompt',
+        message: 'Missing required **Prompt:** section'
+      });
+      isValid = false;
+    }
+
+    // Check for required **References:** section
+    if (!content.includes('**References:**')) {
+      this.warnings.push({
+        task: taskFolderName,
+        type: 'missing_references',
+        message: 'Missing **References:** section (recommended)'
+      });
+    }
+
     // Check for forbidden patterns
     for (const pattern of FORBIDDEN_PATTERNS) {
       if (pattern.test(content)) {

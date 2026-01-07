@@ -4,9 +4,8 @@ name: Migrate RabbitMQ to Azure Service Bus
 type: task
 ---
 
-# Migrate RabbitMQ to Azure Service Bus
+**Prompt:**
 
-## Overview
 Migrate from RabbitMQ to Azure Service Bus, transforming exchanges, queues, and routing patterns to Service Bus equivalents.
 
 ## Prerequisites
@@ -131,14 +130,5 @@ message.setContentType("application/json");
 message.setMessageId(UUID.randomUUID().toString());
 ```
 
-## Best Practices
-
-- Use Service Bus sessions for ordered message processing
-- Implement dead-letter queue handling
-- Use auto-complete for most scenarios
-- Handle duplicate detection with message IDs
-- Monitor with Azure Monitor
-
-## References
-
-- [Azure Service Bus Documentation](https://docs.microsoft.com/azure/service-bus-messaging/)
+**References:**
+- https://docs.microsoft.com/azure/service-bus-messaging/

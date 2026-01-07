@@ -4,10 +4,9 @@ name: Migrate Kafka to Azure Event Hubs
 type: task
 ---
 
-# Migrate Kafka to Azure Event Hubs
+**Prompt:**
 
-## Overview
-Azure Event Hubs provides a Kafka endpoint that enables you to migrate Kafka applications with minimal code changes. This task guides you through the migration process.
+Migrate Kafka applications to Azure Event Hubs. Azure Event Hubs provides a Kafka endpoint that enables you to migrate Kafka applications with minimal code changes.
 
 ## Prerequisites
 - Java 11 or higher
@@ -94,15 +93,6 @@ Be aware of these differences:
 4. Validate message ordering within partitions
 5. Test failure scenarios and retry logic
 
-## Best Practices
-
-- Use connection pooling for producers
-- Implement proper error handling
-- Monitor with Azure Monitor
-- Use managed identities in production
-- Consider Event Hubs Premium for high-throughput scenarios
-
-## References
-
+**References:**
 - file:///kafka.properties.template
-- [Event Hubs for Kafka Documentation](https://docs.microsoft.com/azure/event-hubs/event-hubs-for-kafka-ecosystem-overview)
+- https://docs.microsoft.com/azure/event-hubs/event-hubs-for-kafka-ecosystem-overview

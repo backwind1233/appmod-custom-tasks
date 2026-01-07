@@ -4,9 +4,8 @@ name: Integrate Azure Monitor Application Insights
 type: task
 ---
 
-# Integrate Azure Monitor Application Insights
+**Prompt:**
 
-## Overview
 Add comprehensive monitoring and telemetry to your Java application using Azure Monitor Application Insights.
 
 ## Prerequisites
@@ -154,25 +153,6 @@ Application Insights automatically correlates distributed traces across:
 
 No additional code required for basic distributed tracing!
 
-## Best Practices
-
-- Use connection strings instead of instrumentation keys
-- Set appropriate sampling rates for high-volume applications
-- Use custom dimensions for filtering in Azure Portal
-- Implement proper exception handling and tracking
-- Use availability tests to monitor uptime
-- Set up alerts for critical metrics
-
-## Monitoring in Azure Portal
-
-Access your telemetry:
-1. Open Application Insights resource
-2. View **Live Metrics** for real-time monitoring
-3. Use **Application Map** to visualize dependencies
-4. Query with **Logs** (KQL) for detailed analysis
-5. Create **Dashboards** for key metrics
-
-## References
-
-- [Application Insights Documentation](https://docs.microsoft.com/azure/azure-monitor/app/app-insights-overview)
-- [Azure Monitor Query (KQL) Reference](https://docs.microsoft.com/azure/data-explorer/kusto/query/)
+**References:**
+- https://docs.microsoft.com/azure/azure-monitor/app/app-insights-overview
+- https://docs.microsoft.com/azure/data-explorer/kusto/query/

@@ -4,10 +4,9 @@ name: Migrate AWS S3 to Azure Blob Storage
 type: task
 ---
 
-# Migrate AWS S3 to Azure Blob Storage
+**Prompt:**
 
-## Overview
-This task helps you migrate from AWS S3 SDK to Azure Blob Storage SDK, including dependency updates, API transformations, and configuration changes.
+Migrate from AWS S3 SDK to Azure Blob Storage SDK, including dependency updates, API transformations, and configuration changes.
 
 ## Prerequisites
 - Java 11 or higher
@@ -58,8 +57,6 @@ azure.storage.account.url=https://mystorageaccount.blob.core.windows.net
 
 ### 3. Transform Code
 
-See the `examples/` folder for detailed before/after code samples.
-
 **Key API Mappings:**
 - `AmazonS3` → `BlobServiceClient`
 - `PutObjectRequest` → `BlobClient.upload()`
@@ -98,18 +95,9 @@ BlobServiceClient blobServiceClient = new BlobServiceClientBuilder()
 3. Verify all CRUD operations work correctly
 4. Test error handling and retry logic
 
-## Best Practices
-
-- Use Managed Identity instead of connection strings in production
-- Implement proper error handling and retry policies
-- Consider using async clients for better performance
-- Set up proper logging and monitoring with Azure Monitor
-- Use lifecycle management policies for cost optimization
-
-## References
-
+**References:**
 - file:///before-s3.java
 - file:///after-blob.java
 - file:///application.properties.template
-- [Azure Blob Storage Documentation](https://docs.microsoft.com/azure/storage/blobs/)
-- [Azure Storage SDK for Java](https://github.com/Azure/azure-sdk-for-java/tree/main/sdk/storage)
+- https://docs.microsoft.com/azure/storage/blobs/
+- https://github.com/Azure/azure-sdk-for-java/tree/main/sdk/storage
