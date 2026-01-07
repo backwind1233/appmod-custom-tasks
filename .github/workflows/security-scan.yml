@@ -1,0 +1,220 @@
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  security-scan:
+    name: Security Scan Tasks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install dependencies
+        run: |
+          cd scripts
+          npm install
+
+      - name: Get changed files (PR only)
+        if: github.event_name == 'pull_request'
+        id: changed-files
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            tasks/**/task.md
+            tasks/**/*.java
+            tasks/**/*.py
+            tasks/**/*.xml
+            tasks/**/*.json
+            tasks/**/*.properties
+            tasks/**/*.yml
+            tasks/**/*.yaml
+            tasks/**/*.md
+            tasks/**/*.sh
+            tasks/**/*.ps1
+          files_ignore: |
+            scripts/**
+            .github/**
+            metadata.json
+            README.md
+            CONTRIBUTING.md
+            SECURITY.md
+
+      - name: Get changed task folders (PR only)
+        if: github.event_name == 'pull_request'
+        id: changed-tasks
+        run: |
+          CHANGED_FOLDERS=""
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            # Extract task folder name from tasks/<folder>/...
+            if [[ "$file" == tasks/* ]]; then
+              FOLDER=$(echo "$file" | cut -d'/' -f2)
+              if [[ -n "$FOLDER" ]] && [[ -d "tasks/$FOLDER" ]] && [[ -f "tasks/$FOLDER/task.md" ]]; then
+                CHANGED_FOLDERS="$CHANGED_FOLDERS $FOLDER"
+              fi
+            fi
+          done
+          CHANGED_FOLDERS=$(echo "$CHANGED_FOLDERS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
+          echo "folders=$CHANGED_FOLDERS" >> $GITHUB_OUTPUT
+          echo "Changed task folders: $CHANGED_FOLDERS"
+
+      - name: Run security scan (PR - changed tasks only)
+        if: github.event_name == 'pull_request' && steps.changed-tasks.outputs.folders != ''
+        id: security-scan-pr
+        run: |
+          cd scripts
+          node security-scan.js .. ${{ steps.changed-tasks.outputs.folders }} > security-report.md 2>&1 || true
+          node security-scan.js --json .. ${{ steps.changed-tasks.outputs.folders }} > security-report.json 2>&1 || true
+          cat security-report.md
+          
+          # Parse JSON for status
+          CRITICAL=$(jq '.summary.critical' security-report.json)
+          HIGH=$(jq '.summary.high' security-report.json)
+          
+          if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+            echo "scan_passed=false" >> $GITHUB_OUTPUT
+          else
+            echo "scan_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run security scan (full repository)
+        if: github.event_name != 'pull_request' || steps.changed-tasks.outputs.folders == ''
+        id: security-scan-full
+        run: |
+          cd scripts
+          node security-scan.js .. > security-report.md 2>&1 || true
+          node security-scan.js --json .. > security-report.json 2>&1 || true
+          cat security-report.md
+          
+          CRITICAL=$(jq '.summary.critical' security-report.json)
+          HIGH=$(jq '.summary.high' security-report.json)
+          
+          if [[ "$CRITICAL" -gt 0 ]] || [[ "$HIGH" -gt 0 ]]; then
+            echo "scan_passed=false" >> $GITHUB_OUTPUT
+          else
+            echo "scan_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment PR with security results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '';
+            
+            try {
+              report = fs.readFileSync('scripts/security-report.md', 'utf8');
+            } catch (e) {
+              report = 'No security issues to report or no task files changed.';
+            }
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Security Scan Report')
+            );
+            
+            const body = `## 🔒 Security Scan Report\n\n${report}`;
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Upload security report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: |
+            scripts/security-report.md
+            scripts/security-report.json
+          retention-days: 30
+
+      - name: Fail if critical/high issues found
+        if: steps.security-scan-pr.outputs.scan_passed == 'false' || steps.security-scan-full.outputs.scan_passed == 'false'
+        run: |
+          echo "❌ Security scan failed. Critical or high severity issues found."
+          echo "Please review and fix the security issues before merging."
+          exit 1
+
+  content-safety-check:
+    name: Content Safety Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for suspicious content patterns
+        run: |
+          echo "Checking for suspicious content patterns..."
+          
+          SUSPICIOUS_FOUND=false
+          
+          # Check for common obfuscation patterns
+          if grep -rP '\\x[0-9a-fA-F]{2}' --include="*.md" --include="*.txt" . 2>/dev/null | grep -v '.git'; then
+            echo "⚠️ Found hex-encoded content"
+            SUSPICIOUS_FOUND=true
+          fi
+          
+          # Check for extremely long lines (potential obfuscation)
+          if find . -name "*.md" -exec awk 'length > 2000 {print FILENAME": line "NR" is "length" chars"}' {} \; 2>/dev/null | grep -v '.git' | head -10; then
+            echo "⚠️ Found extremely long lines"
+            SUSPICIOUS_FOUND=true
+          fi
+          
+          # Check for invisible characters
+          if grep -rP '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]' --include="*.md" . 2>/dev/null | grep -v '.git' | head -10; then
+            echo "⚠️ Found invisible/control characters"
+            SUSPICIOUS_FOUND=true
+          fi
+          
+          # Check for common prompt injection phrases
+          if grep -riE "ignore previous|disregard above|forget everything|you are now|system prompt" --include="*.md" . 2>/dev/null | grep -v '.git' | grep -v '.github'; then
+            echo "⚠️ Found potential prompt injection patterns"
+            SUSPICIOUS_FOUND=true
+          fi
+          
+          if [ "$SUSPICIOUS_FOUND" = true ]; then
+            echo ""
+            echo "⚠️ Suspicious content patterns detected. Please review manually."
+            # Don't fail the build, just warn
+          else
+            echo "✅ No suspicious content patterns found"
+          fi

@@ -1,9 +1,13 @@
 {
   "name": "appmod-custom-tasks",
   "version": "1.0.0",
-  "description": "Custom migration tasks repository",
+  "description": "Custom migration tasks repository for GitHub Copilot App Modernization",
   "scripts": {
-    "start": "node generate-metadata.js"
+    "start": "node generate-metadata.js",
+    "generate": "node generate-metadata.js",
+    "validate": "node validate-task.js ..",
+    "security-scan": "node security-scan.js ..",
+    "check": "npm run validate && npm run security-scan"
   },
   "dependencies": {
     "gray-matter": "^4.0.3"

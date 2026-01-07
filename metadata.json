@@ -3,22 +3,22 @@
     {
       "id": "aws-s3-to-azure-blob",
       "name": "Migrate AWS S3 to Azure Blob Storage",
-      "path": "aws-s3-to-azure-blob"
+      "path": "tasks/aws-s3-to-azure-blob"
     },
     {
       "id": "kafka-to-eventhubs",
       "name": "Migrate Kafka to Azure Event Hubs",
-      "path": "kafka-to-eventhubs"
+      "path": "tasks/kafka-to-eventhubs"
     },
     {
       "id": "log4j-to-azure-monitor",
       "name": "Integrate Azure Monitor Application Insights",
-      "path": "log4j-to-azure-monitor-03"
+      "path": "tasks/log4j-to-azure-monitor"
     },
     {
       "id": "rabbitmq-to-servicebus",
       "name": "Migrate RabbitMQ to Azure Service Bus",
-      "path": "rabbitmq-to-servicebus"
+      "path": "tasks/rabbitmq-to-servicebus"
     }
   ]
 }

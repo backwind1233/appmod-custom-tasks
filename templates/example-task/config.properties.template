@@ -1,0 +1,18 @@
+# Example Configuration Template
+# Replace placeholder values with your actual configuration
+
+# Connection Settings
+new.connection.endpoint=${NEW_SERVICE_ENDPOINT}
+new.connection.timeout=30000
+new.connection.retry.count=3
+
+# Authentication
+# Option 1: Connection String
+new.connection.string=${NEW_CONNECTION_STRING}
+
+# Option 2: Managed Identity (recommended for production)
+# new.identity.enabled=true
+# new.identity.client-id=${MANAGED_IDENTITY_CLIENT_ID}
+
+# Logging
+logging.level.com.example=INFO
