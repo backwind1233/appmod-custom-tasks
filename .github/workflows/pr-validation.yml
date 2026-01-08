@@ -136,6 +136,9 @@ jobs:
   check-metadata:
     name: Check Metadata Regeneration
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     
     steps:
       - name: Checkout repository
@@ -154,6 +157,7 @@ jobs:
           npm install
 
       - name: Generate metadata and check for differences
+        id: metadata-check
         run: |
           # Save current metadata
           cp metadata.json metadata.json.original
@@ -165,12 +169,97 @@ jobs:
           
           # Compare
           if ! diff -q metadata.json metadata.json.original > /dev/null 2>&1; then
-            echo "⚠️ metadata.json is out of date!"
-            echo "Please run 'cd scripts && npm start' and commit the updated metadata.json"
-            echo ""
-            echo "Differences:"
-            diff metadata.json.original metadata.json || true
-            exit 1
+            echo "metadata_outdated=true" >> $GITHUB_OUTPUT
+            
+            # Save the expected content for the PR comment
+            cat metadata.json > metadata.json.expected
+            
+            echo "⚠️ metadata.json is out of date"
           else
+            echo "metadata_outdated=false" >> $GITHUB_OUTPUT
             echo "✅ metadata.json is up to date"
           fi
+
+      - name: Comment PR with metadata diff
+        if: steps.metadata-check.outputs.metadata_outdated == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const originalContent = fs.readFileSync('metadata.json.original', 'utf8');
+            const expectedContent = fs.readFileSync('metadata.json.expected', 'utf8');
+            
+            // Create diff display
+            const { execSync } = require('child_process');
+            let diff = '';
+            try {
+              diff = execSync('diff -u metadata.json.original metadata.json.expected || true', { encoding: 'utf8' });
+            } catch (e) {
+              diff = e.stdout || 'Unable to generate diff';
+            }
+            
+            const body = `## ⚠️ metadata.json needs to be updated
+            
+            The \`metadata.json\` file is out of sync with the current task definitions.
+            
+            <details>
+            <summary>📋 Click to view the diff</summary>
+            
+            \`\`\`diff
+            ${diff}
+            \`\`\`
+            
+            </details>
+            
+            <details>
+            <summary>📄 Click to view the complete updated metadata.json</summary>
+            
+            \`\`\`json
+            ${expectedContent}
+            \`\`\`
+            
+            </details>
+            
+            ### How to apply this change:
+            
+            1. Click **"📄 Click to view the complete updated metadata.json"** above
+            2. Copy the JSON content
+            3. In the **Files changed** tab, click the **⋯** menu on \`metadata.json\` → **Edit file**
+            4. Replace the content and commit
+            
+            Or run locally: \`cd scripts && npm start\`
+            `;
+            
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('metadata.json needs to be updated')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Fail if metadata outdated
+        if: steps.metadata-check.outputs.metadata_outdated == 'true'
+        run: |
+          echo "❌ metadata.json is out of date. Please review the PR comment and apply the changes."
+          exit 1
