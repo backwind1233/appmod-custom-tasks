@@ -472,8 +472,8 @@ jobs:
           echo "Critical or high severity prompt safety issues detected."
           exit 1
 
-  llm-safety-check:
-    name: LLM Safety Validation
+  prompt-injection-scan:
+    name: Prompt Injection Detection
     runs-on: ubuntu-latest
     
     steps:
